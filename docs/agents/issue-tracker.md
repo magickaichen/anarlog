@@ -1,8 +1,13 @@
 # Issue tracker: GitHub
 
-Issues and specifications for this fork live in GitHub Issues:
+Issues and specifications for this fork normally live in GitHub Issues:
 
 https://github.com/magickaichen/anarlog/issues
+
+GitHub Issues are currently disabled for this fork. Until they are enabled,
+store implementation-ready specifications in `docs/agents/specs/`. When
+Issues become available, publish each independently verifiable specification
+there and replace the local specification with a pointer to its issue.
 
 Use the `gh` CLI for issue operations. Pass `--repo magickaichen/anarlog`
 explicitly, especially for mutations, so commands never target the upstream
