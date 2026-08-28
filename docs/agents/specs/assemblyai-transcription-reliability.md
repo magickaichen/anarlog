@@ -17,4 +17,4 @@ Issues #1, #2, and #3 may proceed independently. Issue #4 depends on #1 and
 #2. Issue #5 depends on #3 and #4. Issue #6 is the final gate after #1–#5.
 
 The durable design decision remains in
-[ADR 0001](../../../plugins/transcription/docs/adr/0001-assemblyai-two-stage-transcription.md).
+[ADR 0001](https://github.com/magickaichen/anarlog/blob/main/plugins/transcription/docs/adr/0001-assemblyai-two-stage-transcription.md).
