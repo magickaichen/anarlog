@@ -66,8 +66,6 @@ export class SpeakerLabelManager {
   private unknownSpeakerMap: Map<string, number> = new Map();
   private nextIndex = 1;
 
-  constructor(private readonly maxUnknownSpeakerNumber?: number) {}
-
   getUnknownSpeakerNumber(key: SegmentKey): number {
     const serialized = SegmentKeyUtils.serialize(key);
     const existing = this.unknownSpeakerMap.get(serialized);
@@ -75,10 +73,7 @@ export class SpeakerLabelManager {
       return existing;
     }
 
-    const newIndex =
-      this.maxUnknownSpeakerNumber && this.maxUnknownSpeakerNumber > 0
-        ? Math.min(this.nextIndex, this.maxUnknownSpeakerNumber)
-        : this.nextIndex;
+    const newIndex = this.nextIndex;
     this.unknownSpeakerMap.set(serialized, newIndex);
     this.nextIndex += 1;
     return newIndex;
@@ -87,9 +82,8 @@ export class SpeakerLabelManager {
   static fromSegments(
     segments: Segment[],
     ctx?: RenderLabelContext,
-    maxUnknownSpeakerNumber?: number,
   ): SpeakerLabelManager {
-    const manager = new SpeakerLabelManager(maxUnknownSpeakerNumber);
+    const manager = new SpeakerLabelManager();
     for (const segment of segments) {
       if (!SegmentKeyUtils.isKnownSpeaker(segment.key, ctx)) {
         manager.getUnknownSpeakerNumber(segment.key);
@@ -113,11 +107,19 @@ export const SegmentKeyUtils = {
       return true;
     }
 
-    if (ctx && key.channel === "DirectMic") {
+    if (
+      ctx &&
+      key.channel === "DirectMic" &&
+      (key.speaker_index === null || key.speaker_index === undefined)
+    ) {
       return Boolean(ctx.getSelfHumanId());
     }
 
-    if (ctx && key.channel === "RemoteParty") {
+    if (
+      ctx &&
+      key.channel === "RemoteParty" &&
+      (key.speaker_index === null || key.speaker_index === undefined)
+    ) {
       return Boolean(getUniqueRemoteParticipantHumanId(ctx));
     }
 
@@ -138,7 +140,12 @@ export const SegmentKeyUtils = {
       }
     }
 
-    if (ctx && key.channel === "DirectMic" && assignedHumanId == null) {
+    if (
+      ctx &&
+      key.channel === "DirectMic" &&
+      assignedHumanId == null &&
+      (key.speaker_index === null || key.speaker_index === undefined)
+    ) {
       const selfHumanId = ctx.getSelfHumanId();
       if (selfHumanId) {
         const selfHuman = ctx.getHumanName(selfHumanId);
@@ -146,7 +153,12 @@ export const SegmentKeyUtils = {
       }
     }
 
-    if (ctx && key.channel === "RemoteParty" && assignedHumanId == null) {
+    if (
+      ctx &&
+      key.channel === "RemoteParty" &&
+      assignedHumanId == null &&
+      (key.speaker_index === null || key.speaker_index === undefined)
+    ) {
       const remoteHumanId = getUniqueRemoteParticipantHumanId(ctx);
       if (remoteHumanId) {
         return ctx.getHumanName(remoteHumanId) || remoteHumanId;
@@ -185,18 +197,6 @@ function getUniqueRemoteParticipantHumanId(
   ];
 
   return remoteHumanIds.length === 1 ? remoteHumanIds[0] : undefined;
-}
-
-export function getMaxSpeakerNumberForParticipants(
-  participantHumanIds: readonly string[],
-  selfHumanId?: string | null,
-): number | undefined {
-  const ids = new Set(participantHumanIds.filter(Boolean));
-  if (selfHumanId) {
-    ids.add(selfHumanId);
-  }
-
-  return ids.size > 1 ? ids.size : undefined;
 }
 
 export function mergeRenderedAndLiveSegments(

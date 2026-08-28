@@ -1,8 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    hash::Hash,
+};
 
 use owhisper_interface::{
     batch::Response as BatchResponse,
-    stream::{StreamResponse, Word},
+    stream::{Metadata, ProviderTurnCorrection, ProviderTurnCorrectionKind, StreamResponse, Word},
 };
 
 use super::channel_state::ChannelState;
@@ -34,10 +37,8 @@ use super::words::{assemble, assemble_batch, finalize_words};
 ///   to manage the pending→final lifecycle.
 pub struct TranscriptProcessor {
     channels: BTreeMap<i32, ChannelState>,
-    pending_corrections: HashMap<u64, PendingCorrection>,
-    pending_correction_order: VecDeque<u64>,
-    pending_correction_words: usize,
-    pending_correction_bytes: usize,
+    pending_corrections: BoundedCorrectionStore<u64>,
+    provider_turns: BoundedCorrectionStore<ProviderTurnKey>,
     next_job_id: u64,
     finalize_partials: bool,
     flush_partials: bool,
@@ -46,11 +47,31 @@ pub struct TranscriptProcessor {
 const MAX_PENDING_CORRECTION_JOBS: usize = 64;
 const MAX_PENDING_CORRECTION_WORDS: usize = 4_096;
 const MAX_PENDING_CORRECTION_BYTES: usize = 256 * 1024;
+const MAX_PROVIDER_TURNS: usize = 4_096;
+const MAX_PROVIDER_TURN_WORDS: usize = 100_000;
+const MAX_PROVIDER_TURN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHANNEL_STATES: usize = 16;
+
+type ProviderTurnKey = (i32, u32);
 
 struct PendingCorrection {
     original_words: Vec<FinalizedWord>,
     retained_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+struct CorrectionLimits {
+    jobs: usize,
+    words: usize,
+    bytes: usize,
+}
+
+struct BoundedCorrectionStore<K> {
+    jobs: HashMap<K, PendingCorrection>,
+    order: VecDeque<K>,
+    retained_words: usize,
+    retained_bytes: usize,
+    limits: CorrectionLimits,
 }
 
 #[derive(Default)]
@@ -60,6 +81,11 @@ struct CorrectionPromotion {
 }
 
 impl CorrectionPromotion {
+    fn extend(&mut self, other: Self) {
+        self.words.extend(other.words);
+        self.replaced_ids.extend(other.replaced_ids);
+    }
+
     fn extend_job(&mut self, job: PendingCorrection) {
         self.replaced_ids
             .extend(job.original_words.iter().map(|word| word.id.clone()));
@@ -85,6 +111,86 @@ impl CorrectionPromotion {
     }
 }
 
+impl<K> BoundedCorrectionStore<K>
+where
+    K: Copy + Eq + Hash,
+{
+    fn new(limits: CorrectionLimits) -> Self {
+        Self {
+            jobs: HashMap::new(),
+            order: VecDeque::new(),
+            retained_words: 0,
+            retained_bytes: 0,
+            limits,
+        }
+    }
+
+    fn contains_key(&self, key: &K) -> bool {
+        self.jobs.contains_key(key)
+    }
+
+    fn register(&mut self, key: K, original_words: Vec<FinalizedWord>) -> CorrectionPromotion {
+        let mut promotion = CorrectionPromotion::default();
+
+        if let Some(displaced) = self.remove(key) {
+            promotion.extend_job(displaced);
+        }
+
+        let retained_bytes = original_words
+            .iter()
+            .map(|word| word.id.len().saturating_add(word.text.len()))
+            .fold(0usize, usize::saturating_add);
+
+        self.retained_words = self.retained_words.saturating_add(original_words.len());
+        self.retained_bytes = self.retained_bytes.saturating_add(retained_bytes);
+        self.order.push_back(key);
+        self.jobs.insert(
+            key,
+            PendingCorrection {
+                original_words,
+                retained_bytes,
+            },
+        );
+
+        while self.jobs.len() > self.limits.jobs
+            || self.retained_words > self.limits.words
+            || self.retained_bytes > self.limits.bytes
+        {
+            let Some(oldest_key) = self.order.front().copied() else {
+                break;
+            };
+            if let Some(expired) = self.remove(oldest_key) {
+                promotion.extend_job(expired);
+            }
+        }
+
+        promotion
+    }
+
+    fn resolve(&mut self, key: K) -> Option<Vec<String>> {
+        self.remove(key)
+            .map(|job| job.original_words.into_iter().map(|word| word.id).collect())
+    }
+
+    fn remove(&mut self, key: K) -> Option<PendingCorrection> {
+        let job = self.jobs.remove(&key)?;
+        self.order.retain(|candidate| *candidate != key);
+        self.retained_words = self.retained_words.saturating_sub(job.original_words.len());
+        self.retained_bytes = self.retained_bytes.saturating_sub(job.retained_bytes);
+        Some(job)
+    }
+
+    fn promote_all(&mut self) -> CorrectionPromotion {
+        let mut promotion = CorrectionPromotion::default();
+        while let Some(key) = self.order.front().copied() {
+            if let Some(job) = self.remove(key) {
+                promotion.extend_job(job);
+            }
+        }
+        promotion
+    }
+}
+
 struct ParsedStreamResponse<'a> {
     is_final: bool,
     channel: i32,
@@ -98,6 +204,7 @@ struct CorrectionMetadata {
     is_cloud_corrected: bool,
     is_cloud_handoff: bool,
     cloud_job_id: u64,
+    provider_turn: Option<ProviderTurnCorrection>,
 }
 
 struct PartialSnapshot {
@@ -108,10 +215,16 @@ impl TranscriptProcessor {
     pub fn new() -> Self {
         Self {
             channels: BTreeMap::new(),
-            pending_corrections: HashMap::new(),
-            pending_correction_order: VecDeque::new(),
-            pending_correction_words: 0,
-            pending_correction_bytes: 0,
+            pending_corrections: BoundedCorrectionStore::new(CorrectionLimits {
+                jobs: MAX_PENDING_CORRECTION_JOBS,
+                words: MAX_PENDING_CORRECTION_WORDS,
+                bytes: MAX_PENDING_CORRECTION_BYTES,
+            }),
+            provider_turns: BoundedCorrectionStore::new(CorrectionLimits {
+                jobs: MAX_PROVIDER_TURNS,
+                words: MAX_PROVIDER_TURN_WORDS,
+                bytes: MAX_PROVIDER_TURN_BYTES,
+            }),
             next_job_id: 1,
             finalize_partials: true,
             flush_partials: true,
@@ -147,10 +260,23 @@ impl TranscriptProcessor {
             return None;
         }
 
+        let provider_turn_key = parsed.correction.provider_turn_key(parsed.channel);
+        if parsed.correction.is_provider_replacement()
+            && provider_turn_key.is_some_and(|key| !self.provider_turns.contains_key(&key))
+        {
+            return None;
+        }
+
         if !self.channels.contains_key(&parsed.channel) && self.channels.len() >= MAX_CHANNEL_STATES
         {
             return None;
         }
+
+        let displaced_provider_turn = if parsed.is_final {
+            provider_turn_key.and_then(|key| self.provider_turns.remove(key))
+        } else {
+            None
+        };
 
         let channel_state = self
             .channels
@@ -158,16 +284,27 @@ impl TranscriptProcessor {
             .or_insert_with(ChannelState::new);
 
         if parsed.is_final {
-            let word_state = if parsed.correction.is_handoff_job() {
-                WordState::Pending
+            let word_state =
+                if parsed.correction.is_handoff_job() || parsed.correction.is_provider_turn() {
+                    WordState::Pending
+                } else {
+                    WordState::Final
+                };
+
+            let mut new_words = if parsed.correction.is_provider_turn() {
+                channel_state.apply_complete_final(raw_words, word_state)
             } else {
-                WordState::Final
+                channel_state.apply_final(raw_words, word_state, self.finalize_partials)
             };
 
-            let mut new_words =
-                channel_state.apply_final(raw_words, word_state, self.finalize_partials);
-
-            let mut replaced_ids = vec![];
+            let mut replaced_ids = displaced_provider_turn
+                .map(|turn| {
+                    turn.original_words
+                        .into_iter()
+                        .map(|word| word.id)
+                        .collect()
+                })
+                .unwrap_or_default();
 
             if parsed.correction.is_corrected_job() {
                 if new_words.is_empty() {
@@ -185,6 +322,11 @@ impl TranscriptProcessor {
 
             if parsed.correction.is_handoff_job() {
                 let promotion = self.register_job(parsed.correction.cloud_job_id, &new_words);
+                promotion.apply_to(&mut new_words, &mut replaced_ids);
+            }
+
+            if let Some(provider_turn_key) = provider_turn_key {
+                let promotion = self.register_provider_turn(provider_turn_key, &new_words);
                 promotion.apply_to(&mut new_words, &mut replaced_ids);
             }
 
@@ -252,9 +394,11 @@ impl TranscriptProcessor {
         }
 
         self.channels.clear();
-        let promotion = self.promote_all_corrections();
+        let mut promotion = self.promote_all_corrections();
+        promotion.extend(self.promote_all_provider_turns());
         let mut replaced_ids = vec![];
         promotion.apply_to(&mut new_words, &mut replaced_ids);
+        new_words.sort_by_key(|word| (word.channel, word.start_ms, word.end_ms));
 
         TranscriptDelta {
             new_words,
@@ -289,12 +433,6 @@ impl TranscriptProcessor {
     // ── Internal ────────────────────────────────────────────────────────────
 
     fn register_job(&mut self, job_id: u64, words: &[FinalizedWord]) -> CorrectionPromotion {
-        let mut promotion = CorrectionPromotion::default();
-
-        if let Some(displaced) = self.remove_job(job_id) {
-            promotion.extend_job(displaced);
-        }
-
         let original_words = words
             .iter()
             .cloned()
@@ -303,65 +441,40 @@ impl TranscriptProcessor {
                 ..word
             })
             .collect::<Vec<_>>();
-        let retained_bytes = original_words
+        self.pending_corrections.register(job_id, original_words)
+    }
+
+    fn register_provider_turn(
+        &mut self,
+        key: ProviderTurnKey,
+        words: &[FinalizedWord],
+    ) -> CorrectionPromotion {
+        let original_words = words
             .iter()
-            .map(|word| word.id.len().saturating_add(word.text.len()))
-            .fold(0usize, usize::saturating_add);
-
-        self.pending_correction_words = self
-            .pending_correction_words
-            .saturating_add(original_words.len());
-        self.pending_correction_bytes =
-            self.pending_correction_bytes.saturating_add(retained_bytes);
-        self.pending_correction_order.push_back(job_id);
-        self.pending_corrections.insert(
-            job_id,
-            PendingCorrection {
-                original_words,
-                retained_bytes,
-            },
-        );
-
-        while self.pending_corrections.len() > MAX_PENDING_CORRECTION_JOBS
-            || self.pending_correction_words > MAX_PENDING_CORRECTION_WORDS
-            || self.pending_correction_bytes > MAX_PENDING_CORRECTION_BYTES
-        {
-            let Some(oldest_job_id) = self.pending_correction_order.front().copied() else {
-                break;
-            };
-            if let Some(expired) = self.remove_job(oldest_job_id) {
-                promotion.extend_job(expired);
-            }
-        }
-
-        promotion
+            .filter(|word| word.state == WordState::Pending)
+            .cloned()
+            .map(|word| FinalizedWord {
+                state: WordState::Final,
+                ..word
+            })
+            .collect::<Vec<_>>();
+        self.provider_turns.register(key, original_words)
     }
 
     fn resolve_job(&mut self, job_id: u64) -> Option<Vec<String>> {
-        self.remove_job(job_id)
-            .map(|job| job.original_words.into_iter().map(|word| word.id).collect())
+        self.pending_corrections.resolve(job_id)
     }
 
     fn remove_job(&mut self, job_id: u64) -> Option<PendingCorrection> {
-        let job = self.pending_corrections.remove(&job_id)?;
-        self.pending_correction_order.retain(|id| *id != job_id);
-        self.pending_correction_words = self
-            .pending_correction_words
-            .saturating_sub(job.original_words.len());
-        self.pending_correction_bytes = self
-            .pending_correction_bytes
-            .saturating_sub(job.retained_bytes);
-        Some(job)
+        self.pending_corrections.remove(job_id)
     }
 
     fn promote_all_corrections(&mut self) -> CorrectionPromotion {
-        let mut promotion = CorrectionPromotion::default();
-        while let Some(job_id) = self.pending_correction_order.front().copied() {
-            if let Some(job) = self.remove_job(job_id) {
-                promotion.extend_job(job);
-            }
-        }
-        promotion
+        self.pending_corrections.promote_all()
+    }
+
+    fn promote_all_provider_turns(&mut self) -> CorrectionPromotion {
+        self.provider_turns.promote_all()
     }
 
     fn next_job_id(&mut self) -> u64 {
@@ -404,13 +517,14 @@ impl<'a> ParsedStreamResponse<'a> {
             channel: channel_index.first().copied().unwrap_or(0),
             words: &alt.words,
             transcript: &alt.transcript,
-            correction: CorrectionMetadata::from_extra(metadata.extra.as_ref()),
+            correction: CorrectionMetadata::from_metadata(metadata),
         })
     }
 }
 
 impl CorrectionMetadata {
-    fn from_extra(extra: Option<&HashMap<String, serde_json::Value>>) -> Self {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        let extra = metadata.extra.as_ref();
         let get_bool = |key: &str| -> bool {
             extra
                 .and_then(|value| value.get(key))
@@ -428,6 +542,7 @@ impl CorrectionMetadata {
             is_cloud_corrected: get_bool("cloud_corrected"),
             is_cloud_handoff: get_bool("cloud_handoff"),
             cloud_job_id: get_u64("cloud_job_id"),
+            provider_turn: metadata.provider_turn_correction(),
         }
     }
 
@@ -437,6 +552,19 @@ impl CorrectionMetadata {
 
     fn is_handoff_job(&self) -> bool {
         self.is_cloud_handoff && self.cloud_job_id != 0
+    }
+
+    fn is_provider_turn(&self) -> bool {
+        self.provider_turn.is_some()
+    }
+
+    fn is_provider_replacement(&self) -> bool {
+        self.provider_turn
+            .is_some_and(|turn| turn.kind == ProviderTurnCorrectionKind::Replacement)
+    }
+
+    fn provider_turn_key(&self, channel: i32) -> Option<ProviderTurnKey> {
+        self.provider_turn.map(|turn| (channel, turn.turn_order))
     }
 }
 
@@ -564,6 +692,18 @@ mod tests {
             },
             channel_index: vec![0, 1],
         }
+    }
+
+    fn with_provider_correction(
+        mut response: StreamResponse,
+        turn_order: u32,
+        kind: ProviderTurnCorrectionKind,
+    ) -> StreamResponse {
+        let StreamResponse::TranscriptResponse { metadata, .. } = &mut response else {
+            unreachable!();
+        };
+        metadata.set_provider_turn_correction(ProviderTurnCorrection { turn_order, kind });
+        response
     }
 
     fn finalized_word(id: impl Into<String>, text: impl Into<String>) -> FinalizedWord {
@@ -815,9 +955,9 @@ mod tests {
                     .map(|word| word.id),
             );
 
-            assert!(processor.pending_corrections.len() <= MAX_PENDING_CORRECTION_JOBS);
-            assert!(processor.pending_correction_words <= MAX_PENDING_CORRECTION_WORDS);
-            assert!(processor.pending_correction_bytes <= MAX_PENDING_CORRECTION_BYTES);
+            assert!(processor.pending_corrections.jobs.len() <= MAX_PENDING_CORRECTION_JOBS);
+            assert!(processor.pending_corrections.retained_words <= MAX_PENDING_CORRECTION_WORDS);
+            assert!(processor.pending_corrections.retained_bytes <= MAX_PENDING_CORRECTION_BYTES);
         }
 
         assert_eq!(finalized_ids.len(), 10);
@@ -846,10 +986,10 @@ mod tests {
         finalized_ids.extend(flush.new_words.into_iter().map(|word| word.id));
 
         assert_eq!(finalized_ids.len(), job_count);
-        assert!(processor.pending_corrections.is_empty());
-        assert!(processor.pending_correction_order.is_empty());
-        assert_eq!(processor.pending_correction_words, 0);
-        assert_eq!(processor.pending_correction_bytes, 0);
+        assert!(processor.pending_corrections.jobs.is_empty());
+        assert!(processor.pending_corrections.order.is_empty());
+        assert_eq!(processor.pending_corrections.retained_words, 0);
+        assert_eq!(processor.pending_corrections.retained_bytes, 0);
     }
 
     #[test]
@@ -859,7 +999,7 @@ mod tests {
         let (_, oversized) =
             processor.submit_correction(vec![finalized_word(&oversized_id, " text")]);
 
-        assert!(processor.pending_corrections.is_empty());
+        assert!(processor.pending_corrections.jobs.is_empty());
         assert_eq!(oversized.new_words.len(), 1);
         assert_eq!(oversized.new_words[0].id, oversized_id);
         assert_eq!(oversized.new_words[0].state, WordState::Final);
@@ -874,7 +1014,7 @@ mod tests {
         assert_eq!(displaced.words.len(), 1);
         assert_eq!(displaced.words[0].id, "old");
         assert_eq!(displaced.words[0].state, WordState::Final);
-        assert_eq!(processor.pending_corrections.len(), 1);
+        assert_eq!(processor.pending_corrections.jobs.len(), 1);
     }
 
     #[test]
@@ -891,6 +1031,142 @@ mod tests {
                 .is_none()
         );
         assert!(processor.channels.is_empty());
+    }
+
+    #[test]
+    fn provider_turns_persist_immediately_and_revision_replaces_matching_turn() {
+        let mut processor = TranscriptProcessor::new();
+        let mut first_turn = with_provider_correction(
+            multi_word_stream_response(&["hello", "there"], true, None),
+            0,
+            ProviderTurnCorrectionKind::Pending,
+        );
+        let StreamResponse::TranscriptResponse { channel, .. } = &mut first_turn else {
+            unreachable!();
+        };
+        channel.alternatives[0].words[0].speaker = Some(0);
+        channel.alternatives[0].words[1].speaker = Some(0);
+
+        let first = processor.process(&first_turn).expect("first turn delta");
+        let first_ids = first
+            .new_words
+            .iter()
+            .map(|word| word.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(first.new_words.len(), 2);
+        assert!(
+            first
+                .new_words
+                .iter()
+                .all(|word| word.state == WordState::Pending)
+        );
+
+        let mut second_turn = with_provider_correction(
+            stream_response(10, true, None),
+            1,
+            ProviderTurnCorrectionKind::Pending,
+        );
+        let StreamResponse::TranscriptResponse { channel, .. } = &mut second_turn else {
+            unreachable!();
+        };
+        channel.alternatives[0].words[0].speaker = Some(2);
+
+        let second = processor.process(&second_turn).expect("second turn delta");
+        let second_id = second.new_words[0].id.clone();
+        assert_eq!(second.new_words.len(), 1);
+        assert_eq!(second.new_words[0].state, WordState::Pending);
+
+        let mut revision = with_provider_correction(
+            multi_word_stream_response(&["hello", "there"], true, None),
+            0,
+            ProviderTurnCorrectionKind::Replacement,
+        );
+        let StreamResponse::TranscriptResponse { channel, .. } = &mut revision else {
+            unreachable!();
+        };
+        channel.alternatives[0].words[0].speaker = Some(0);
+        channel.alternatives[0].words[1].speaker = Some(1);
+
+        let revised = processor.process(&revision).expect("revision delta");
+        assert_eq!(revised.replaced_ids, first_ids);
+        assert_eq!(revised.new_words.len(), 2);
+        assert_eq!(
+            revised
+                .new_words
+                .iter()
+                .map(|word| word.speaker_index)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1)]
+        );
+        assert!(
+            revised
+                .new_words
+                .iter()
+                .all(|word| word.state == WordState::Pending)
+        );
+
+        let flushed = processor.flush();
+        assert!(flushed.replaced_ids.contains(&second_id));
+        assert_eq!(
+            flushed
+                .new_words
+                .iter()
+                .map(|word| (&word.text, word.speaker_index, word.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (&" hello".to_string(), Some(0), WordState::Final),
+                (&" there".to_string(), Some(1), WordState::Final),
+                (&" word-10".to_string(), Some(2), WordState::Final),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_provider_revision_is_ignored() {
+        let mut processor = TranscriptProcessor::new();
+        let revision = with_provider_correction(
+            stream_response(0, true, None),
+            999,
+            ProviderTurnCorrectionKind::Replacement,
+        );
+
+        assert!(processor.process(&revision).is_none());
+        assert!(processor.channels.is_empty());
+    }
+
+    #[test]
+    fn provider_turn_order_is_scoped_to_its_channel() {
+        let mut processor = TranscriptProcessor::new();
+        let mut first_channel = with_provider_correction(
+            stream_response(0, true, None),
+            0,
+            ProviderTurnCorrectionKind::Pending,
+        );
+        let StreamResponse::TranscriptResponse { channel_index, .. } = &mut first_channel else {
+            unreachable!();
+        };
+        *channel_index = vec![0, 2];
+        let mut second_channel = with_provider_correction(
+            stream_response(10, true, None),
+            0,
+            ProviderTurnCorrectionKind::Pending,
+        );
+        let StreamResponse::TranscriptResponse { channel_index, .. } = &mut second_channel else {
+            unreachable!();
+        };
+        *channel_index = vec![1, 2];
+
+        let first = processor
+            .process(&first_channel)
+            .expect("first channel turn");
+        let second = processor
+            .process(&second_channel)
+            .expect("second channel turn");
+
+        assert_eq!(first.new_words.len(), 1);
+        assert_eq!(second.new_words.len(), 1);
+        assert!(second.replaced_ids.is_empty());
+        assert_eq!(processor.flush().new_words.len(), 2);
     }
 
     #[test]
@@ -970,6 +1246,6 @@ mod tests {
                 .iter()
                 .all(|word| word.state == WordState::Final)
         );
-        assert!(processor.pending_corrections.is_empty());
+        assert!(processor.pending_corrections.jobs.is_empty());
     }
 }

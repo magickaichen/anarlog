@@ -65,12 +65,14 @@ fn assemble_words<'a>(
 
 fn push_assembled_word(result: &mut Vec<RawWord>, token: AssemblyToken<'_>, text: String) {
     let should_merge = !text.starts_with(' ')
-        && result.last().is_some()
-        && !should_insert_boundary_space(
-            result.last().unwrap().text.as_str(),
-            token.word,
-            text.trim_start(),
-        );
+        && result.last().is_some_and(|previous| {
+            previous.speaker == token.speaker
+                && !should_insert_boundary_space(
+                    previous.text.as_str(),
+                    token.word,
+                    text.trim_start(),
+                )
+        });
 
     if should_merge {
         merge_into_previous(result.last_mut().unwrap(), token, &text);
@@ -316,6 +318,23 @@ mod tests {
 
         assert_eq!(words.len(), 1);
         assert_eq!(words[0].text, "한국");
+    }
+
+    #[test]
+    fn preserves_no_space_tokens_across_speaker_boundary() {
+        let transcript = "你好";
+        let mut first = token("你", None, 0, 100);
+        first.speaker = Some(0);
+        let mut second = token("好", None, 100, 200);
+        second.speaker = Some(1);
+
+        let words = assemble_words(vec![first, second].into_iter(), transcript, 0);
+
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].text, "你");
+        assert_eq!(words[0].speaker, Some(0));
+        assert_eq!(words[1].text, "好");
+        assert_eq!(words[1].speaker, Some(1));
     }
 
     #[test]

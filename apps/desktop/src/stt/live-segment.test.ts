@@ -7,7 +7,6 @@ import type {
 
 import {
   applyRenderRequestIdentitiesToSegments,
-  getMaxSpeakerNumberForParticipants,
   mergeRenderedAndLiveSegments,
   SegmentKeyUtils,
   SpeakerLabelManager,
@@ -27,15 +26,15 @@ const twoPersonCtx: RenderLabelContext = {
 };
 
 describe("SegmentKeyUtils", () => {
-  it("treats diarized direct-mic segments as self", () => {
+  it("keeps diarized direct-mic segments distinct from channel identity", () => {
     const key: Parameters<typeof SegmentKeyUtils.isKnownSpeaker>[0] = {
       channel: "DirectMic",
       speaker_index: 2,
       speaker_human_id: null,
     };
 
-    expect(SegmentKeyUtils.isKnownSpeaker(key, ctx)).toBe(true);
-    expect(SegmentKeyUtils.renderLabel(key, ctx)).toBe("Me");
+    expect(SegmentKeyUtils.isKnownSpeaker(key, ctx)).toBe(false);
+    expect(SegmentKeyUtils.renderLabel(key, ctx)).toBe("Speaker 3");
   });
 
   it("does not label assigned direct-mic segments as self when the name is unavailable", () => {
@@ -48,7 +47,7 @@ describe("SegmentKeyUtils", () => {
     expect(SegmentKeyUtils.renderLabel(key, ctx)).toBe("Speaker 2");
   });
 
-  it("caps unknown speaker labels when a participant max is provided", () => {
+  it("does not cap provider speakers to the participant count", () => {
     const segments: Segment[] = [0, 1, 2].map(
       (speakerIndex) =>
         ({
@@ -64,7 +63,7 @@ describe("SegmentKeyUtils", () => {
           text: "",
         }) as Segment,
     );
-    const manager = SpeakerLabelManager.fromSegments(segments, undefined, 2);
+    const manager = SpeakerLabelManager.fromSegments(segments);
 
     expect(
       SegmentKeyUtils.renderLabel(segments[0]!.key, undefined, manager),
@@ -74,13 +73,13 @@ describe("SegmentKeyUtils", () => {
     ).toBe("Speaker 2");
     expect(
       SegmentKeyUtils.renderLabel(segments[2]!.key, undefined, manager),
-    ).toBe("Speaker 2");
+    ).toBe("Speaker 3");
   });
 
   it("labels remote-party segments as the unique other participant", () => {
     const key: Parameters<typeof SegmentKeyUtils.renderLabel>[0] = {
       channel: "RemoteParty",
-      speaker_index: 0,
+      speaker_index: null,
       speaker_human_id: null,
     };
 
@@ -88,12 +87,18 @@ describe("SegmentKeyUtils", () => {
     expect(SegmentKeyUtils.renderLabel(key, twoPersonCtx)).toBe("Artem");
   });
 
-  it("derives max speaker number from distinct participants plus self", () => {
-    expect(getMaxSpeakerNumberForParticipants(["remote"], "self")).toBe(2);
-    expect(getMaxSpeakerNumberForParticipants(["self", "remote"], "self")).toBe(
-      2,
+  it("keeps a provider speaker distinct from the unique other participant", () => {
+    const key: Parameters<typeof SegmentKeyUtils.renderLabel>[0] = {
+      channel: "RemoteParty",
+      speaker_index: 0,
+      speaker_human_id: null,
+    };
+    const manager = new SpeakerLabelManager();
+
+    expect(SegmentKeyUtils.isKnownSpeaker(key, twoPersonCtx)).toBe(false);
+    expect(SegmentKeyUtils.renderLabel(key, twoPersonCtx, manager)).toBe(
+      "Speaker 1",
     );
-    expect(getMaxSpeakerNumberForParticipants([], "self")).toBeUndefined();
   });
 });
 

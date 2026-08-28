@@ -468,22 +468,14 @@ fn build_listen_params(args: &ListenerArgs) -> owhisper_interface::ListenParams 
         "redemption_time_ms".to_string(),
         redemption_time_ms.to_string(),
     )]);
-    let num_speakers = expected_speakers(args);
-
     owhisper_interface::ListenParams {
         model: Some(args.model.clone()),
         languages: args.languages.clone(),
         sample_rate: super::super::SAMPLE_RATE,
         keywords: args.keywords.clone(),
-        num_speakers,
-        max_speakers: num_speakers,
         custom_query: Some(custom_query),
         ..Default::default()
     }
-}
-
-fn expected_speakers(args: &ListenerArgs) -> Option<u32> {
-    crate::expected_speakers_per_channel(&args.participant_human_ids, args.self_human_id.as_deref())
 }
 
 fn format_languages(languages: &[anlg_language::Language]) -> String {
@@ -674,20 +666,6 @@ mod tests {
     }
 
     #[test]
-    fn expected_speakers_counts_distinct_remote_participants() {
-        let mut args = listener_args("https://api.assemblyai.com", "u3-rt-pro");
-        args.participant_human_ids = vec![
-            "remote-a".to_string(),
-            "self".to_string(),
-            "remote-b".to_string(),
-            "remote-a".to_string(),
-        ];
-        args.self_human_id = Some("self".to_string());
-
-        assert_eq!(expected_speakers(&args), Some(2));
-    }
-
-    #[test]
     fn build_extra_prefers_explicit_stream_offset() {
         let mut args = listener_args("https://api.deepgram.com", "nova-3");
         args.stream_offset_secs = Some(12.5);
@@ -698,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn build_listen_params_sets_num_speakers_without_assemblyai_custom_query() {
+    fn build_listen_params_does_not_infer_assemblyai_speakers_from_participants() {
         let mut args = listener_args("https://api.assemblyai.com", "u3-rt-pro");
         args.participant_human_ids = vec!["remote".to_string()];
         args.self_human_id = Some("self".to_string());
@@ -706,14 +684,14 @@ mod tests {
         let params = build_listen_params(&args);
         let custom_query = params.custom_query.expect("custom query");
 
-        assert_eq!(params.num_speakers, Some(1));
-        assert_eq!(params.max_speakers, Some(1));
+        assert_eq!(params.num_speakers, None);
+        assert_eq!(params.max_speakers, None);
         assert!(!custom_query.contains_key("speaker_labels"));
         assert!(!custom_query.contains_key("max_speakers"));
     }
 
     #[test]
-    fn build_listen_params_does_not_add_assemblyai_hints_for_other_providers() {
+    fn build_listen_params_does_not_infer_speakers_for_other_providers() {
         let mut args = listener_args("https://api.deepgram.com/v1", "nova-3");
         args.participant_human_ids = vec!["remote".to_string()];
         args.self_human_id = Some("self".to_string());
@@ -721,14 +699,14 @@ mod tests {
         let params = build_listen_params(&args);
         let custom_query = params.custom_query.expect("custom query");
 
-        assert_eq!(params.num_speakers, Some(1));
-        assert_eq!(params.max_speakers, Some(1));
+        assert_eq!(params.num_speakers, None);
+        assert_eq!(params.max_speakers, None);
         assert!(!custom_query.contains_key("speaker_labels"));
         assert!(!custom_query.contains_key("max_speakers"));
     }
 
     #[test]
-    fn build_listen_params_limits_each_channel_to_remote_participants() {
+    fn build_listen_params_keeps_speaker_count_optional_with_multiple_participants() {
         let mut args = listener_args("https://api.anarlog.so/stt", "cloud");
         args.participant_human_ids = vec![
             "self".to_string(),
@@ -739,8 +717,8 @@ mod tests {
 
         let params = build_listen_params(&args);
 
-        assert_eq!(params.num_speakers, Some(2));
-        assert_eq!(params.max_speakers, Some(2));
+        assert_eq!(params.num_speakers, None);
+        assert_eq!(params.max_speakers, None);
     }
 
     #[test]

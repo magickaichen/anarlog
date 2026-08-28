@@ -344,20 +344,6 @@ async fn refresh_listener(myself: ActorRef<SessionMsg>, state: &mut SessionState
 
 fn update_requires_listener_refresh(current: &SessionParams, update: &SessionConfigUpdate) -> bool {
     current.languages != update.languages
-        || expected_speaker_count(
-            &current.participant_human_ids,
-            current.self_human_id.as_deref(),
-        ) != expected_speaker_count(
-            &update.participant_human_ids,
-            update.self_human_id.as_deref(),
-        )
-}
-
-fn expected_speaker_count(
-    participant_human_ids: &[String],
-    self_human_id: Option<&str>,
-) -> Option<u32> {
-    crate::expected_speakers_per_channel(participant_human_ids, self_human_id)
 }
 
 async fn handle_listener_failure(
@@ -747,14 +733,17 @@ mod tests {
     }
 
     #[test]
-    fn config_update_refreshes_when_expected_speaker_count_changes() {
+    fn config_update_does_not_refresh_when_participants_change() {
         let mut ctx = test_ctx();
         ctx.params.participant_human_ids = vec!["self".to_string()];
         ctx.params.self_human_id = Some("self".to_string());
         let state = test_state(ctx);
         let update = test_update(vec![], vec!["self", "remote-a", "remote-b"], Some("self"));
 
-        assert!(update_requires_listener_refresh(&state.ctx.params, &update));
+        assert!(!update_requires_listener_refresh(
+            &state.ctx.params,
+            &update
+        ));
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use anlg_ws_client::client::Message;
 use owhisper_interface::ListenParams;
-use owhisper_interface::stream::{Alternatives, Channel, Metadata, StreamResponse};
-use serde::Deserialize;
+use owhisper_interface::stream::{
+    Alternatives, Channel, Metadata, ProviderTurnCorrection, ProviderTurnCorrectionKind,
+    StreamResponse,
+};
+use serde::{Deserialize, Deserializer};
 
 use super::AssemblyAIAdapter;
 use super::language::{U3_STREAMING_LANGUAGES, U35_STREAMING_LANGUAGES};
@@ -61,9 +64,7 @@ impl RealtimeSttAdapter for AssemblyAIAdapter {
                 resolved_model,
                 ResolvedLiveModel::Universal35Pro | ResolvedLiveModel::U3RtPro
             ) {
-                if Self::streaming_speaker_labels_enabled(params) {
-                    query_pairs.append_pair("speaker_labels", "true");
-                }
+                query_pairs.append_pair("speaker_labels", "true");
 
                 if let Some(max_speakers) = Self::streaming_max_speakers(params) {
                     query_pairs.append_pair("max_speakers", &max_speakers.to_string());
@@ -114,6 +115,10 @@ impl RealtimeSttAdapter for AssemblyAIAdapter {
                 vec![]
             }
             AssemblyAIMessage::Turn(turn) => Self::parse_turn(turn),
+            AssemblyAIMessage::SpeakerRevision { revisions } => revisions
+                .into_iter()
+                .flat_map(Self::parse_speaker_revision)
+                .collect(),
             AssemblyAIMessage::Termination {
                 audio_duration_seconds,
                 session_duration_seconds,
@@ -157,6 +162,10 @@ enum AssemblyAIMessage {
         expires_at: u64,
     },
     Turn(TurnMessage),
+    SpeakerRevision {
+        #[serde(default)]
+        revisions: Vec<SpeakerRevisionItem>,
+    },
     Termination {
         audio_duration_seconds: u64,
         session_duration_seconds: u64,
@@ -180,6 +189,7 @@ struct TurnMessage {
     #[serde(default)]
     transcript: String,
     #[serde(default)]
+    #[serde(deserialize_with = "deserialize_speaker_label")]
     speaker_label: Option<String>,
     #[serde(default)]
     utterance: Option<String>,
@@ -206,6 +216,45 @@ struct AssemblyAIWord {
     #[serde(default)]
     #[allow(dead_code)]
     word_is_final: bool,
+    #[serde(default, deserialize_with = "deserialize_word_speaker")]
+    speaker: WordSpeaker,
+}
+
+#[derive(Debug, Default)]
+enum WordSpeaker {
+    #[default]
+    Missing,
+    Explicit(Option<String>),
+}
+
+fn deserialize_word_speaker<'de, D>(deserializer: D) -> Result<WordSpeaker, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(|value| match value {
+        serde_json::Value::String(label) => WordSpeaker::Explicit(Some(label)),
+        _ => WordSpeaker::Explicit(None),
+    })
+}
+
+fn deserialize_speaker_label<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(|value| match value {
+        serde_json::Value::String(label) => Some(label),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct SpeakerRevisionItem {
+    turn_order: u32,
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_speaker_label")]
+    speaker_label: Option<String>,
+    #[serde(default)]
+    words: Vec<AssemblyAIWord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,17 +285,6 @@ impl AssemblyAIAdapter {
         }
     }
 
-    fn streaming_speaker_labels_enabled(params: &ListenParams) -> bool {
-        params.num_speakers.is_some()
-            || params.min_speakers.is_some()
-            || params.max_speakers.is_some()
-            || params
-                .custom_query
-                .as_ref()
-                .and_then(|custom| custom.get("speaker_labels"))
-                .is_some_and(|value| value == "true")
-    }
-
     fn streaming_max_speakers(params: &ListenParams) -> Option<u32> {
         params.max_speakers.or(params.num_speakers).or_else(|| {
             params
@@ -259,11 +297,11 @@ impl AssemblyAIAdapter {
 
     fn parse_speaker_label(label: Option<&str>) -> Option<i32> {
         let label = label?.trim();
-        if label.is_empty() || label.eq_ignore_ascii_case("unknown") {
+        if label.len() != 1 {
             return None;
         }
 
-        let upper = label.as_bytes().first().copied()?.to_ascii_uppercase();
+        let upper = label.as_bytes()[0].to_ascii_uppercase();
         if !upper.is_ascii_uppercase() {
             return None;
         }
@@ -272,6 +310,37 @@ impl AssemblyAIAdapter {
     }
 
     fn parse_turn(turn: TurnMessage) -> Vec<StreamResponse> {
+        Self::parse_turn_with_correction(turn, ProviderTurnCorrectionKind::Pending)
+    }
+
+    fn parse_speaker_revision(revision: SpeakerRevisionItem) -> Vec<StreamResponse> {
+        let transcript = revision
+            .words
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self::parse_turn_with_correction(
+            TurnMessage {
+                turn_order: revision.turn_order,
+                turn_is_formatted: true,
+                end_of_turn: true,
+                transcript,
+                speaker_label: revision.speaker_label,
+                utterance: None,
+                language_code: None,
+                language_confidence: None,
+                end_of_turn_confidence: 0.0,
+                words: revision.words,
+            },
+            ProviderTurnCorrectionKind::Replacement,
+        )
+    }
+
+    fn parse_turn_with_correction(
+        turn: TurnMessage,
+        correction_kind: ProviderTurnCorrectionKind,
+    ) -> Vec<StreamResponse> {
         tracing::debug!(
             transcript = %turn.transcript,
             utterance = ?turn.utterance,
@@ -288,13 +357,18 @@ impl AssemblyAIAdapter {
         let is_final = turn.turn_is_formatted || turn.end_of_turn;
         let speech_final = turn.end_of_turn;
         let from_finalize = false;
-        let speaker = Self::parse_speaker_label(turn.speaker_label.as_deref());
+        let turn_speaker = Self::parse_speaker_label(turn.speaker_label.as_deref());
 
         let words: Vec<_> = turn
             .words
             .iter()
             .filter(|w| w.word_is_final)
             .map(|w| {
+                let speaker = match &w.speaker {
+                    WordSpeaker::Missing => turn_speaker,
+                    WordSpeaker::Explicit(Some(label)) => Self::parse_speaker_label(Some(label)),
+                    WordSpeaker::Explicit(None) => None,
+                };
                 WordBuilder::new(&w.text)
                     .start(ms_to_secs(w.start))
                     .end(ms_to_secs(w.end))
@@ -340,6 +414,14 @@ impl AssemblyAIAdapter {
             }],
         };
 
+        let mut metadata = Metadata::default();
+        if is_final {
+            metadata.set_provider_turn_correction(ProviderTurnCorrection {
+                turn_order: turn.turn_order,
+                kind: correction_kind,
+            });
+        }
+
         vec![StreamResponse::TranscriptResponse {
             is_final,
             speech_final,
@@ -347,7 +429,7 @@ impl AssemblyAIAdapter {
             start,
             duration,
             channel,
-            metadata: Metadata::default(),
+            metadata,
             channel_index: vec![0, 1],
         }]
     }
@@ -375,9 +457,11 @@ impl ResolvedLiveModel {
 mod tests {
     use anlg_language::ISO639;
     use owhisper_interface::ListenParams;
-    use owhisper_interface::stream::StreamResponse;
+    use owhisper_interface::stream::{
+        ProviderTurnCorrection, ProviderTurnCorrectionKind, StreamResponse,
+    };
 
-    use super::{AssemblyAIAdapter, AssemblyAIWord, ResolvedLiveModel, TurnMessage};
+    use super::{AssemblyAIAdapter, AssemblyAIWord, ResolvedLiveModel, TurnMessage, WordSpeaker};
     use crate::ListenClient;
     use crate::adapter::RealtimeSttAdapter;
     use crate::test_utils::{UrlTestCase, run_dual_test, run_single_test, run_url_test_cases};
@@ -499,6 +583,22 @@ mod tests {
     }
 
     #[test]
+    fn test_streaming_diarization_without_speaker_count() {
+        let url = AssemblyAIAdapter.build_ws_url(
+            API_BASE,
+            &owhisper_interface::ListenParams {
+                model: Some("universal-3-5-pro-realtime".to_string()),
+                ..Default::default()
+            },
+            1,
+        );
+
+        let query = url.query().expect("query string");
+        assert!(query.contains("speaker_labels=true"));
+        assert!(!query.contains("max_speakers"));
+    }
+
+    #[test]
     fn test_streaming_diarization_hints_skip_whisper_fallback() {
         let url = AssemblyAIAdapter.build_ws_url(
             API_BASE,
@@ -588,6 +688,7 @@ mod tests {
                 end: 500,
                 confidence: 0.9,
                 word_is_final: true,
+                speaker: WordSpeaker::Missing,
             }],
         });
 
@@ -596,6 +697,188 @@ mod tests {
         };
 
         assert_eq!(channel.alternatives[0].words[0].speaker, Some(1));
+    }
+
+    #[test]
+    fn parse_response_preserves_word_speaker_changes_within_one_turn() {
+        let responses = AssemblyAIAdapter.parse_response(
+            r#"{
+                "type": "Turn",
+                "turn_order": 2,
+                "turn_is_formatted": true,
+                "end_of_turn": true,
+                "transcript": "Hello there",
+                "speaker_label": "A",
+                "end_of_turn_confidence": 0.99,
+                "words": [
+                    {"text":"Hello","start":0,"end":500,"confidence":0.9,"word_is_final":true,"speaker":"A"},
+                    {"text":"there","start":500,"end":900,"confidence":0.9,"word_is_final":true,"speaker":"B"}
+                ]
+            }"#,
+        );
+
+        let StreamResponse::TranscriptResponse {
+            channel, metadata, ..
+        } = &responses[0]
+        else {
+            panic!("expected transcript response");
+        };
+
+        assert_eq!(
+            channel.alternatives[0]
+                .words
+                .iter()
+                .map(|word| word.speaker)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1)]
+        );
+        assert_eq!(
+            metadata.provider_turn_correction(),
+            Some(ProviderTurnCorrection {
+                turn_order: 2,
+                kind: ProviderTurnCorrectionKind::Pending,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_response_falls_back_only_when_word_speaker_is_absent() {
+        let responses = AssemblyAIAdapter.parse_response(
+            r#"{
+                "type": "Turn",
+                "turn_order": 3,
+                "turn_is_formatted": true,
+                "end_of_turn": true,
+                "transcript": "Fallback null malformed",
+                "speaker_label": "B",
+                "words": [
+                    {"text":"Fallback","start":0,"end":500,"confidence":0.9,"word_is_final":true},
+                    {"text":"null","start":500,"end":700,"confidence":0.9,"word_is_final":true,"speaker":null},
+                    {"text":"malformed","start":700,"end":900,"confidence":0.9,"word_is_final":true,"speaker":"PENDING"}
+                ]
+            }"#,
+        );
+
+        let StreamResponse::TranscriptResponse { channel, .. } = &responses[0] else {
+            panic!("expected transcript response");
+        };
+
+        assert_eq!(
+            channel.alternatives[0]
+                .words
+                .iter()
+                .map(|word| word.speaker)
+                .collect::<Vec<_>>(),
+            vec![Some(1), None, None]
+        );
+        assert_eq!(
+            channel.alternatives[0].transcript,
+            "Fallback null malformed"
+        );
+    }
+
+    #[test]
+    fn parse_response_treats_unassigned_labels_as_anonymous() {
+        for label in ["PENDING", "UNKNOWN", "", "AA", "speaker-a", "1"] {
+            let raw = serde_json::json!({
+                "type": "Turn",
+                "turn_order": 4,
+                "turn_is_formatted": true,
+                "end_of_turn": true,
+                "transcript": "Still here",
+                "speaker_label": label,
+                "words": [{
+                    "text": "Still",
+                    "start": 0,
+                    "end": 500,
+                    "confidence": 0.9,
+                    "word_is_final": true,
+                    "speaker": label,
+                }],
+            });
+
+            let responses = AssemblyAIAdapter.parse_response(&raw.to_string());
+            let StreamResponse::TranscriptResponse { channel, .. } = &responses[0] else {
+                panic!("expected transcript response");
+            };
+
+            assert_eq!(channel.alternatives[0].words[0].speaker, None, "{label}");
+            assert_eq!(channel.alternatives[0].transcript, "Still here");
+        }
+    }
+
+    #[test]
+    fn parse_response_keeps_text_for_non_string_speaker_metadata() {
+        let responses = AssemblyAIAdapter.parse_response(
+            r#"{
+                "type": "Turn",
+                "turn_order": 5,
+                "turn_is_formatted": true,
+                "end_of_turn": true,
+                "transcript": "Still all here",
+                "speaker_label": {"unexpected": "value"},
+                "words": [
+                    {"text":"Still","start":0,"end":200,"confidence":0.9,"word_is_final":true,"speaker":1},
+                    {"text":"all","start":200,"end":400,"confidence":0.9,"word_is_final":true,"speaker":false},
+                    {"text":"here","start":400,"end":600,"confidence":0.9,"word_is_final":true,"speaker":[]}
+                ]
+            }"#,
+        );
+
+        let StreamResponse::TranscriptResponse { channel, .. } = &responses[0] else {
+            panic!("expected transcript response");
+        };
+
+        assert_eq!(channel.alternatives[0].transcript, "Still all here");
+        assert_eq!(
+            channel.alternatives[0]
+                .words
+                .iter()
+                .map(|word| word.speaker)
+                .collect::<Vec<_>>(),
+            vec![None, None, None]
+        );
+    }
+
+    #[test]
+    fn parse_response_emits_speaker_revisions_for_matching_turns() {
+        let responses = AssemblyAIAdapter.parse_response(
+            r#"{
+                "type": "SpeakerRevision",
+                "revisions": [{
+                    "turn_order": 3,
+                    "speaker_label": "B",
+                    "words": [
+                        {"text":"Hello","start":1000,"end":1200,"confidence":0.9,"word_is_final":true,"speaker":"B"},
+                        {"text":"there","start":1200,"end":1500,"confidence":0.9,"word_is_final":true,"speaker":"A"}
+                    ]
+                }]
+            }"#,
+        );
+
+        let StreamResponse::TranscriptResponse {
+            channel, metadata, ..
+        } = &responses[0]
+        else {
+            panic!("expected transcript response");
+        };
+
+        assert_eq!(channel.alternatives[0].transcript, "Hello there");
+        assert_eq!(
+            channel.alternatives[0]
+                .words
+                .iter()
+                .map(|word| word.speaker)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(0)]
+        );
+        assert_eq!(
+            metadata.provider_turn_correction(),
+            Some(ProviderTurnCorrection {
+                turn_order: 3,
+                kind: ProviderTurnCorrectionKind::Replacement,
+            })
+        );
     }
 
     macro_rules! single_test {

@@ -318,7 +318,7 @@ describe("getFloatingTranscriptBubbles", () => {
     ]);
   });
 
-  it("labels remote bubbles as the unique other participant", () => {
+  it("keeps provider-labeled remote bubbles distinct from participants", () => {
     const ctx: RenderLabelContext = {
       getSelfHumanId: () => "self",
       getHumanName: (id) => (id === "remote" ? "Artem" : undefined),
@@ -331,6 +331,32 @@ describe("getFloatingTranscriptBubbles", () => {
           key: {
             channel: "RemoteParty",
             speaker_index: 0,
+            speaker_human_id: null,
+          },
+          start_ms: 0,
+          text: "hello",
+          words: [{ text: "hello" }],
+        }),
+      ],
+      ctx,
+    );
+
+    expect(bubbles[0]?.speakerLabel).toBe("Speaker 1");
+  });
+
+  it("labels an undiarized remote bubble as the unique other participant", () => {
+    const ctx: RenderLabelContext = {
+      getSelfHumanId: () => "self",
+      getHumanName: (id) => (id === "remote" ? "Artem" : undefined),
+      getParticipantHumanIds: () => ["self", "remote"],
+    };
+    const bubbles = getFloatingTranscriptBubbles(
+      [
+        createSegment({
+          id: "remote",
+          key: {
+            channel: "RemoteParty",
+            speaker_index: null,
             speaker_human_id: null,
           },
           start_ms: 0,
