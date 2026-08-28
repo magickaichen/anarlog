@@ -7,6 +7,5 @@ drafts/
 *.draft.mdx
 
 # Repository-internal agent workflow
-agents/issue-tracker.md
-agents/triage-labels.md
+agents/*.md
 agents/specs/
