@@ -37,6 +37,10 @@ The pipeline has these boundaries:
   automatic refinement, and re-transcription.
 - Online meetings enable speaker diarization by default. An expected speaker
   count is optional and never inferred as a hard limit from invitees.
+- Live transcription persists each final word's speaker label, uses the
+  turn-level label only when word-level evidence is absent, and applies
+  `SpeakerRevision` corrections before termination. Pending or malformed
+  labels remain unassigned.
 - Re-transcription uses an explicit provider, model, and language target. It
   never silently substitutes another provider or model.
 - Observed meeting-platform participants are preferred speaker candidates,
@@ -49,7 +53,7 @@ The pipeline has these boundaries:
   untouched machine text automatically and requests confirmation before
   replacing manually edited text.
 - Refinement retries remain bounded and use the same target. Failure preserves
-  the live transcript and remains visible and retryable.
+  the live transcript as provisional and remains visible and retryable.
 
 Keep provider-neutral transcription, identity-suggestion, and refinement-state
 contracts around the AssemblyAI-first implementation so another provider can
@@ -86,8 +90,8 @@ and error behavior do not match the user's explicit transcription choice.
 
 ## References
 
-- [Implementation specification](../specs/assemblyai-transcription-reliability.md)
-- [Transcription domain language](../../../plugins/transcription/CONTEXT.md)
+- [Implementation specification](../../../../docs/agents/specs/assemblyai-transcription-reliability.md)
+- [Transcription domain language](../../CONTEXT.md)
 - [AssemblyAI streaming diarization](https://www.assemblyai.com/docs/streaming/label-speakers-and-separate-channels)
 - [AssemblyAI Speaker Identification](https://www.assemblyai.com/docs/speech-understanding/speaker-identification)
 - [AssemblyAI pre-recorded model selection](https://www.assemblyai.com/docs/pre-recorded-audio/select-the-speech-model)

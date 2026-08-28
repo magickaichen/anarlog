@@ -3,6 +3,40 @@
 The transcription context defines the language for converting meeting audio
 into text and attributing that text to speakers.
 
+## Boundary
+
+Transcription owns provider speech-to-text integration, transcript refinement,
+speaker diarization, speaker identity evidence, and the transition from a live
+transcript to a final transcript. Audio capture and meeting participant
+discovery are upstream. Session transcript rendering and meeting intelligence
+are downstream.
+
+## Invariants
+
+- A live transcript remains provisional until refinement or an explicit
+  re-transcription succeeds.
+- Word-level speaker evidence takes precedence over a turn-level label.
+- A suggested identity is never a confirmed speaker assignment.
+- Only confirmed identities may train trusted voiceprints.
+- One session language and explicit transcription target govern every pass.
+- A refinement failure preserves the live transcript as provisional and stays
+  visible and retryable.
+
+## Ownership
+
+- Provider I/O adapters live under `crates/owhisper-client/src/adapter/`.
+- Streaming response contracts live under `crates/owhisper-interface/`.
+- Desktop orchestration and persistence live under `apps/desktop/src/stt/`.
+- Speaker resolution and voiceprints live under `plugins/transcription/` and
+  `crates/transcript/`.
+- Transcript presentation lives under
+  `apps/desktop/src/session/components/note-input/transcript/`.
+- Meeting accessibility and calendar services supply participant candidates.
+
+## Decisions
+
+- [Use two-stage AssemblyAI transcription with conservative speaker identity](./docs/adr/0001-assemblyai-two-stage-transcription.md)
+
 ## Language
 
 **Live transcript**:
@@ -11,8 +45,9 @@ and speaker attribution may be refined after the meeting.
 _Avoid_: Final transcript, authoritative transcript
 
 **Final transcript**:
-The authoritative transcript produced after post-capture refinement completes,
-or the live transcript when refinement cannot complete.
+The authoritative transcript produced after post-capture refinement or an
+explicit re-transcription completes successfully. A failed refinement leaves
+the live transcript provisional and does not produce a final transcript.
 _Avoid_: Live transcript, raw transcript
 
 **Transcript refinement**:
@@ -29,6 +64,16 @@ _Avoid_: Transcript refinement, retry
 The separation of spoken words into anonymous speaker clusters. It answers who
 spoke when without assigning a person's name.
 _Avoid_: Speaker identification, name recognition
+
+**Word-level speaker attribution**:
+A speaker label attached to each recognized word. It preserves speaker changes
+inside one provider turn and takes precedence over the turn-level label.
+_Avoid_: Turn-level speaker approximation, speaker identification
+
+**Speaker revision**:
+A provider correction that replaces previously received turn-level and
+word-level speaker labels before the streaming session terminates.
+_Avoid_: New transcript turn, speaker identification
 
 **Speaker identification**:
 The mapping of an anonymous speaker cluster to a known person. Identification
