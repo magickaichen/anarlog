@@ -1,18 +1,20 @@
+import { t } from "@lingui/core/macro";
 import { arch, platform } from "@tauri-apps/plugin-os";
 import { useCallback } from "react";
 
 import type { TranscriptionParams } from "@anlg/plugin-transcription";
-import { sonnerToast } from "@anlg/ui/components/ui/toast";
 
 import { BatchResponseProcessingError } from "./batch-response-processing-error";
+import {
+  isKnownBatchTargetModel,
+  preflightBatchTargetConnection,
+} from "./batch-target-preflight";
 import { useListener } from "./contexts";
 import { persistTranscriptWrite } from "./persist-retry";
 import { useSTTConnection } from "./useSTTConnection";
 
 import { useAuth } from "~/auth";
-import { useBillingAccess } from "~/auth/billing-context";
 import { withCloudsyncActivity } from "~/db/cloudsync-activity";
-import { env } from "~/env";
 import {
   deleteProcessedAudioForRetention,
   normalizeAudioRetention,
@@ -35,6 +37,10 @@ import {
   getTranscriptRecord,
   type TranscriptRecord,
 } from "~/stt/queries";
+import {
+  normalizeTranscriptionLanguages,
+  type TranscriptionPolicy,
+} from "~/stt/transcription-policy";
 import type { SpeakerHintWithId, WordWithId } from "~/stt/types";
 
 type RunOptions = {
@@ -59,14 +65,6 @@ type RunOptions = {
         replaceTranscriptId?: string;
         startedAt: number;
       };
-};
-
-type BatchTarget = {
-  provider: TranscriptionParams["provider"];
-  model: string;
-  baseUrl: string;
-  apiKey: string;
-  label: string;
 };
 
 const DIRECT_BATCH_PROVIDERS: Set<TranscriptionParams["provider"]> = new Set([
@@ -100,14 +98,6 @@ export const STOPPED_TRANSCRIPTION_ERROR_MESSAGE = "Transcription stopped.";
 export const EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE =
   "Batch transcription did not include the current recording.";
 const MIN_REFINED_SPEAKER_OVERLAP_RATIO = 0.6;
-const LOCAL_SONIQO_BATCH_TARGET = {
-  provider: "soniqo",
-  model: "soniqo-parakeet-batch",
-  baseUrl: "soniqo://local",
-  apiKey: "",
-  label: "Soniqo batch transcription",
-} satisfies BatchTarget;
-
 export function getBatchProvider(
   provider: string,
   model: string,
@@ -143,58 +133,12 @@ export function canRunBatchTranscription(
   return true;
 }
 
-export function getBatchFallbackTarget({
-  isPaid,
-  accessToken,
-  apiBaseUrl,
-  currentPlatform = platform(),
-  currentArch = arch(),
-}: {
-  isPaid: boolean;
-  accessToken?: string | null;
-  apiBaseUrl: string;
-  currentPlatform?: ReturnType<typeof platform>;
-  currentArch?: ReturnType<typeof arch>;
-}): BatchTarget | null {
-  if (isPaid && accessToken) {
-    return {
-      provider: "anarlog",
-      model: "cloud",
-      baseUrl: new URL("/stt", apiBaseUrl).toString(),
-      apiKey: accessToken,
-      label: "Pro cloud transcription",
-    };
-  }
-
-  return isDesktopLocalSttAvailable(currentPlatform, currentArch)
-    ? LOCAL_SONIQO_BATCH_TARGET
-    : null;
-}
-
 async function canUseBatchTarget(
   provider: TranscriptionParams["provider"],
   model: string,
   languages: readonly string[],
 ) {
   return isSupportedLanguagesBatch(provider, model, languages);
-}
-
-function selectedProviderLabel(
-  conn: { provider: string; model: string } | null,
-  modelOverride?: string,
-) {
-  if (!conn) {
-    return "the selected speech-to-text provider";
-  }
-
-  return modelOverride ?? conn.model ?? conn.provider;
-}
-
-function sameBatchTarget(
-  a: Pick<BatchTarget, "provider" | "model"> | null,
-  b: Pick<BatchTarget, "provider" | "model">,
-) {
-  return a?.provider === b.provider && a.model === b.model;
 }
 
 function prepareTranscriptPromotion(
@@ -530,14 +474,17 @@ export function getSessionSpeakerCount(
   return humanIds.size > 1 ? humanIds.size : undefined;
 }
 
-export const useRunBatch = (sessionId: string) => {
+export const useRunBatch = (
+  sessionId: string,
+  targetPolicy?: TranscriptionPolicy | null,
+) => {
   const session = useSession(sessionId);
   const participants = useSessionParticipants(sessionId);
+  const persistedPolicy = targetPolicy ?? session?.transcription ?? undefined;
 
   const startTranscription = useListener((state) => state.startTranscription);
-  const { conn } = useSTTConnection();
+  const { conn, connectionIssue } = useSTTConnection(persistedPolicy);
   const auth = useAuth();
-  const billing = useBillingAccess();
   const aiLanguage = useConfigValue("ai_language");
   const spokenLanguages = useConfigValue("spoken_languages");
   const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
@@ -554,72 +501,98 @@ export const useRunBatch = (sessionId: string) => {
         );
       }
 
-      const languages =
+      const languages = normalizeTranscriptionLanguages(
         options?.languages ??
-        getTranscriptionLanguages(aiLanguage, spokenLanguages);
+          persistedPolicy?.languages ??
+          getTranscriptionLanguages(aiLanguage, spokenLanguages),
+      );
       const currentPlatform = platform();
       const currentArch = arch();
-      const selectedProviderId = options?.provider ?? conn?.provider;
-      const selectedModel = options?.model ?? conn?.model;
+      const selectedProviderId =
+        options?.provider ?? persistedPolicy?.provider ?? conn?.provider;
+      const selectedModel =
+        options?.model ?? persistedPolicy?.model ?? conn?.model;
       const selectedProvider =
         selectedProviderId && selectedModel
           ? getBatchProvider(selectedProviderId, selectedModel)
           : null;
+      const explicitConnection =
+        options?.baseUrl !== undefined && options.apiKey !== undefined
+          ? { baseUrl: options.baseUrl, apiKey: options.apiKey }
+          : null;
+      const storedConnection =
+        conn &&
+        conn.provider === selectedProviderId &&
+        conn.model === selectedModel
+          ? conn
+          : null;
+      const credentials = explicitConnection ?? storedConnection;
       const selectedTarget =
-        conn && selectedModel && selectedProvider
+        credentials && selectedProviderId && selectedModel && selectedProvider
           ? {
               provider: selectedProvider,
+              requestedProvider: selectedProviderId,
               model: selectedModel,
-              baseUrl: options?.baseUrl ?? conn.baseUrl,
-              apiKey: options?.apiKey ?? conn.apiKey,
-              label: selectedModel,
+              baseUrl: credentials.baseUrl,
+              apiKey: credentials.apiKey,
             }
           : null;
       const selectedOnDeviceUnsupported = !!(
-        selectedTarget &&
+        selectedProviderId &&
+        selectedModel &&
         (isOnDeviceSttModel(selectedProviderId, selectedModel) ||
           isLocalFileSttModel(selectedProviderId, selectedModel)) &&
         !isDesktopLocalSttAvailable(currentPlatform, currentArch)
       );
-      const selectedTargetSupported =
-        selectedTarget && !selectedOnDeviceUnsupported
-          ? await canUseBatchTarget(
-              selectedTarget.provider,
-              selectedTarget.model,
-              languages,
-            )
-          : false;
-      const fallbackTarget = getBatchFallbackTarget({
-        isPaid: billing.isPaid,
-        accessToken: auth?.session?.access_token,
-        apiBaseUrl: env.VITE_API_URL,
-        currentPlatform,
-        currentArch,
-      });
-      const shouldUseSelectedTarget =
-        selectedTargetSupported ||
-        (fallbackTarget && sameBatchTarget(selectedTarget, fallbackTarget));
-      const target = shouldUseSelectedTarget
-        ? (selectedTarget ?? fallbackTarget)
-        : fallbackTarget;
-
-      if (!target) {
+      if (!selectedProviderId || !selectedModel) {
         throw new Error(
-          selectedTarget && !selectedOnDeviceUnsupported
-            ? `${selectedProviderLabel(conn, selectedModel)} is not available for batch transcription with the selected languages. Choose languages it supports, or configure another speech-to-text provider.`
-            : `${selectedProviderLabel(conn, selectedModel)} is not available for batch transcription on this platform. Configure a batch-capable speech-to-text provider.`,
+          t`The recorded transcription target is missing. Choose a speech-to-text provider and model for this meeting.`,
         );
       }
-
-      if (!shouldUseSelectedTarget) {
-        sonnerToast.warning("Using a batch transcription provider", {
-          description: `${
-            selectedTarget
-              ? selectedProviderLabel(conn, selectedModel)
-              : selectedProviderLabel(conn)
-          } is not available for batch transcription. Using ${target.label} instead.`,
-        });
+      if (!selectedProvider) {
+        throw new Error(
+          t`${selectedModel} is not available for batch transcription with ${selectedProviderId}. The recorded target does not support batch transcription.`,
+        );
       }
+      if (!isKnownBatchTargetModel(selectedProviderId, selectedModel)) {
+        throw new Error(
+          t`${selectedModel} is not an available batch transcription model for ${selectedProviderId}.`,
+        );
+      }
+      if (selectedOnDeviceUnsupported) {
+        throw new Error(
+          t`${selectedModel} is not available for batch transcription on ${currentPlatform}/${currentArch}. The recorded target requires Apple silicon macOS.`,
+        );
+      }
+      if (!selectedTarget) {
+        const reason =
+          connectionIssue === "authentication"
+            ? t`The saved authentication credentials are unavailable.`
+            : connectionIssue === "local_service"
+              ? t`The selected local transcription service is unavailable.`
+              : t`The selected transcription endpoint is unavailable.`;
+        throw new Error(
+          t`${selectedProviderId} ${selectedModel} is not connected. ${reason}`,
+        );
+      }
+      if (
+        !(await canUseBatchTarget(
+          selectedTarget.provider,
+          selectedTarget.model,
+          languages,
+        ))
+      ) {
+        throw new Error(
+          t`${selectedModel} is not available for batch transcription with the selected languages (${languages.join(", ")}).`,
+        );
+      }
+      await preflightBatchTargetConnection({
+        provider: selectedProviderId,
+        model: selectedModel,
+        baseUrl: selectedTarget.baseUrl,
+        apiKey: selectedTarget.apiKey,
+      });
+      const target = selectedTarget;
 
       let refinedTranscriptSource: TranscriptRecord | null = null;
       const replaceTranscriptId =
@@ -663,6 +636,7 @@ export const useRunBatch = (sessionId: string) => {
         options?.handlePersist;
       let stagedWords: WordWithId[] = [];
       let stagedHints: SpeakerHintWithId[] = [];
+      let providerModel: string | undefined;
       const resetStagedTranscript = () => {
         transcriptId = null;
         stagedWords = [];
@@ -727,6 +701,7 @@ export const useRunBatch = (sessionId: string) => {
             stagedWords = [];
             stagedHints = [];
           }
+          providerModel = persistOptions?.providerModel ?? providerModel;
           stagedWords.push(...newWords);
           stagedHints.push(...newHints);
         });
@@ -813,8 +788,10 @@ export const useRunBatch = (sessionId: string) => {
                       startedAt: promoted.startedAt ?? startedAt,
                       memo: memoMd,
                       source: "batch_transcription",
-                      provider: target.provider,
+                      provider: target.requestedProvider,
                       model: target.model,
+                      languages,
+                      providerModel,
                       words: promoted.words,
                       speakerHints,
                       replaceSession: promoted.replaceSession,
@@ -865,12 +842,13 @@ export const useRunBatch = (sessionId: string) => {
       auth?.session?.access_token,
       aiLanguage,
       audioRetention,
-      billing.isPaid,
+      connectionIssue,
       dictionaryTerms,
       rememberSpeakers,
       session,
       participants,
       spokenLanguages,
+      persistedPolicy,
       startTranscription,
       sessionId,
     ],

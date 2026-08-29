@@ -16,7 +16,8 @@ const SESSION_COLUMNS: &str = "
     SELECT id, workspace_id, owner_user_id, title, kind, status, created_at, updated_at,
            started_at, ended_at, timezone, language, event_id, external_event_id,
            external_provider, series_id, source_apps_json, event_json, folder_path, slug,
-           metadata_json, locked
+           metadata_json, locked, transcription_provider, transcription_model,
+           transcription_languages_json
     FROM sessions
 ";
 
@@ -32,7 +33,8 @@ const SESSION_DOCUMENT_COLUMNS: &str = "
 const SESSION_TRANSCRIPT_COLUMNS: &str = "
     SELECT transcript.id, transcript.workspace_id, transcript.owner_user_id,
            transcript.session_id, transcript.source, transcript.provider, transcript.model,
-           transcript.language, transcript.started_at_ms, transcript.ended_at_ms,
+           transcript.language, transcript.requested_languages_json, transcript.provider_model,
+           transcript.started_at_ms, transcript.ended_at_ms,
            transcript.audio_attachment_id, transcript.memo, transcript.words_json,
            transcript.speaker_hints_json, transcript.metadata_json, transcript.created_at,
            transcript.updated_at

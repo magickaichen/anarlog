@@ -12,6 +12,7 @@ import type {
 import { executeTransaction, liveQueryClient, useLiveQuery } from "~/db";
 import { enqueueDatabaseWrite } from "~/db/write-queue";
 import { isLockedFlag } from "~/lock/flag";
+import { normalizeTranscriptionLanguages } from "~/stt/transcription-policy";
 
 type SessionSqlRow = {
   id: string;
@@ -24,6 +25,9 @@ type SessionSqlRow = {
   raw_body_format: string;
   raw_template_id: string;
   locked: boolean | number;
+  transcription_provider: string;
+  transcription_model: string;
+  transcription_languages_json: string;
 };
 
 type SessionSummarySqlRow = {
@@ -59,6 +63,9 @@ const SESSION_SELECT_SQL = `
     sessions.event_json,
     sessions.title,
     sessions.locked,
+    sessions.transcription_provider,
+    sessions.transcription_model,
+    sessions.transcription_languages_json,
     COALESCE(note.body, '') AS raw_body,
     COALESCE(note.body_format, 'prosemirror_json') AS raw_body_format,
     COALESCE(note.template_id, '') AS raw_template_id
@@ -263,6 +270,19 @@ export function updateSession(
       params.push(value);
     }
 
+    if (changes.transcription) {
+      assignments.push("transcription_provider = ?");
+      params.push(changes.transcription.provider);
+      assignments.push("transcription_model = ?");
+      params.push(changes.transcription.model);
+      assignments.push("transcription_languages_json = ?");
+      params.push(
+        JSON.stringify(
+          normalizeTranscriptionLanguages(changes.transcription.languages),
+        ),
+      );
+    }
+
     const statements: Array<{ sql: string; params: unknown[] }> = [];
     if (assignments.length > 0) {
       statements.push({
@@ -362,5 +382,28 @@ function mapSessionRow(row: SessionSqlRow): SessionRecord {
     raw_md: rawMd,
     raw_template_id: row.raw_template_id,
     locked: isLockedFlag(row.locked),
+    transcription:
+      row.transcription_provider && row.transcription_model
+        ? {
+            provider: row.transcription_provider,
+            model: row.transcription_model,
+            languages: parseTranscriptionLanguages(
+              row.transcription_languages_json,
+            ),
+          }
+        : null,
   };
+}
+
+function parseTranscriptionLanguages(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return normalizeTranscriptionLanguages(
+      Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string")
+        : [],
+    );
+  } catch {
+    return ["en"];
+  }
 }

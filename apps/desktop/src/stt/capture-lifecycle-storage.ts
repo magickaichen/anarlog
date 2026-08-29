@@ -16,6 +16,7 @@ export type CaptureLifecycleMarker = {
   memo: string;
   provider?: string;
   model?: string;
+  languages?: string[];
   summaryMode?: "regenerate" | "if_empty";
 };
 
@@ -162,6 +163,10 @@ function parseCaptureLifecycleMarker(
         ? { provider: parsed.provider }
         : {}),
       ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+      ...(Array.isArray(parsed.languages) &&
+      parsed.languages.every((language) => typeof language === "string")
+        ? { languages: parsed.languages }
+        : {}),
       ...(parsed.summaryMode === "regenerate" ||
       parsed.summaryMode === "if_empty"
         ? { summaryMode: parsed.summaryMode }

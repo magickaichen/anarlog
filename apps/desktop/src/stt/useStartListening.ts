@@ -13,6 +13,7 @@ import {
 
 import { trackAnalyticsEvent } from "~/analytics";
 import { useShell } from "~/contexts/shell";
+import { updateSession } from "~/session/queries";
 import { getSessionEvent } from "~/session/utils";
 import { useConfigValue } from "~/shared/config";
 import { useTabs } from "~/store/zustand/tabs";
@@ -21,6 +22,7 @@ import {
   getTranscriptionLanguages,
 } from "~/stt/capabilities";
 import { useSessionParticipantHumanIds } from "~/stt/queries";
+import { resolveTranscriptionPolicy } from "~/stt/transcription-policy";
 
 export {
   getPostCaptureAction,
@@ -65,18 +67,29 @@ export function useStartListening(sessionId: string) {
       return;
     }
     await stopMeetingChatTasks();
-    const lifecycle = createCaptureLifecycle();
+    const transcription = resolveTranscriptionPolicy(session?.transcription, {
+      provider: conn?.provider ?? "",
+      model: conn?.model ?? "",
+      languages: getTranscriptionLanguages(aiLanguage, spokenLanguages),
+    });
+    if (
+      !session?.transcription &&
+      transcription.provider &&
+      transcription.model
+    ) {
+      await updateSession(sessionId, { transcription });
+    }
+    const lifecycle = createCaptureLifecycle(undefined, transcription);
     await lifecycle.ready;
     const { getSessionKeywords } = await import("./useKeywords");
     const keywords = await getSessionKeywords({
       sessionId,
       dictionaryTerms,
     });
-    const languages = getTranscriptionLanguages(aiLanguage, spokenLanguages);
     const liveTranscriptionConfig = await getLiveTranscriptionConfig({
-      provider: conn?.provider,
-      model: conn?.model,
-      languages,
+      provider: transcription.provider,
+      model: transcription.model,
+      languages: transcription.languages,
     });
     if (!canStartLiveSession(sessionId)) {
       return;

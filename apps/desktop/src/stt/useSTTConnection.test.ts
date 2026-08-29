@@ -3,14 +3,31 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { config, startServerForPathMock } = vi.hoisted(() => ({
-  config: {
-    current_stt_provider: "anarlog",
-    current_stt_model: "cloud",
-    local_stt_model_path: "",
-  },
-  startServerForPathMock: vi.fn(),
-}));
+const { config, startServerForPathMock, useAiProviderMock } = vi.hoisted(
+  () => ({
+    config: {
+      current_stt_provider: "anarlog",
+      current_stt_model: "cloud",
+      local_stt_model_path: "",
+    },
+    startServerForPathMock: vi.fn(),
+    useAiProviderMock: vi.fn((_type: string, provider: string) =>
+      provider === "assemblyai"
+        ? {
+            type: "stt",
+            base_url: "https://api.assemblyai.com",
+            api_key: "assembly-key",
+          }
+        : provider === "deepgram"
+          ? {
+              type: "stt",
+              base_url: "https://api.deepgram.com",
+              api_key: "",
+            }
+          : { type: "stt", base_url: "   ", api_key: "" },
+    ),
+  }),
+);
 
 vi.mock("@anlg/plugin-local-stt", () => ({
   commands: {
@@ -33,11 +50,7 @@ vi.mock("~/env", () => ({
 }));
 
 vi.mock("~/settings/providers", () => ({
-  useAiProvider: () => ({
-    type: "stt",
-    base_url: "   ",
-    api_key: "",
-  }),
+  useAiProvider: useAiProviderMock,
 }));
 
 vi.mock("~/shared/config", () => ({
@@ -61,6 +74,49 @@ describe("useSTTConnection", () => {
     config.current_stt_model = "cloud";
     config.local_stt_model_path = "";
     startServerForPathMock.mockReset();
+    useAiProviderMock.mockClear();
+  });
+
+  it("resolves credentials for a persisted session target", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(
+      () =>
+        useSTTConnection({
+          provider: "assemblyai",
+          model: "universal-3-pro",
+        }),
+      { wrapper },
+    );
+
+    expect(useAiProviderMock).toHaveBeenCalledWith("stt", "assemblyai");
+    expect(result.current.conn).toEqual({
+      provider: "assemblyai",
+      model: "universal-3-pro",
+      baseUrl: "https://api.assemblyai.com",
+      apiKey: "assembly-key",
+    });
+    expect(result.current.connectionIssue).toBeNull();
+  });
+
+  it("distinguishes missing authentication from endpoint connectivity", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(
+      () => useSTTConnection({ provider: "deepgram", model: "nova-3" }),
+      { wrapper },
+    );
+
+    expect(result.current.conn).toBeNull();
+    expect(result.current.connectionIssue).toBe("authentication");
   });
 
   it("uses the hosted STT URL when the stored Anarlog URL is blank", () => {

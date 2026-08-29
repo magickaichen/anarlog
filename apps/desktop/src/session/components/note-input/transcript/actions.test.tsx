@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   queueAutoEnhanceIfSummaryEmpty: vi.fn(),
   runBatch: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
+  latestTarget: vi.fn(),
+  session: vi.fn(),
+  useRunBatch: vi.fn(),
 }));
 
 vi.mock("@anlg/plugin-fs-sync", () => ({
@@ -16,7 +20,11 @@ vi.mock("@anlg/plugin-fs-sync", () => ({
 }));
 
 vi.mock("@anlg/ui/components/ui/toast", () => ({
-  sonnerToast: { error: mocks.toastError },
+  sonnerToast: { error: mocks.toastError, info: mocks.toastInfo },
+}));
+
+vi.mock("~/session/queries", () => ({
+  useSession: mocks.session,
 }));
 
 vi.mock("~/services/enhancer", () => ({
@@ -33,7 +41,11 @@ vi.mock("~/stt/contexts", () => ({
 vi.mock("~/stt/useRunBatch", () => ({
   isStoppedTranscriptionError: (error: unknown) =>
     error instanceof Error && error.message === "Transcription stopped.",
-  useRunBatch: () => mocks.runBatch,
+  useRunBatch: mocks.useRunBatch,
+}));
+
+vi.mock("~/stt/queries", () => ({
+  useLatestSessionTranscriptTarget: mocks.latestTarget,
 }));
 
 import { useRegenerateTranscript } from "./actions";
@@ -41,10 +53,37 @@ import { useRegenerateTranscript } from "./actions";
 describe("useRegenerateTranscript", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    const target = {
+      provider: "assemblyai",
+      model: "universal-3-pro",
+      languages: ["en"],
+      providerModel: "universal-3-pro",
+    };
+    mocks.latestTarget.mockReturnValue(target);
+    mocks.session.mockReturnValue({ transcription: null });
+    mocks.useRunBatch.mockReturnValue(mocks.runBatch);
     mocks.audioPath.mockResolvedValue({
       status: "ok",
       data: "/tmp/session.wav",
     });
+  });
+
+  it("shows and reuses the current final transcript target", async () => {
+    mocks.runBatch.mockResolvedValue(undefined);
+    const target = mocks.latestTarget();
+    const { result } = renderHook(() => useRegenerateTranscript("session-1"));
+
+    expect(mocks.useRunBatch).toHaveBeenCalledWith("session-1", target);
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(mocks.toastInfo).toHaveBeenCalledWith("Re-transcription started", {
+      description: "assemblyai · universal-3-pro · en",
+    });
+    expect(mocks.toastInfo.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runBatch.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("shows batch transcription failures even when an old transcript exists", async () => {

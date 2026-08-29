@@ -76,6 +76,35 @@ describe("session SQLite queries", () => {
     );
   });
 
+  it("maps the session-owned transcription policy", () => {
+    mocks.rows = [
+      {
+        id: "session-1",
+        owner_user_id: "user-1",
+        created_at: "2026-08-29T09:00:00.000Z",
+        folder_path: "",
+        event_json: "{}",
+        title: "Planning",
+        raw_body: "",
+        raw_body_format: "prosemirror_json",
+        raw_template_id: "",
+        locked: 0,
+        transcription_provider: "assemblyai",
+        transcription_model: "universal-3-5-pro",
+        transcription_languages_json: '["en","es"]',
+      },
+    ];
+
+    const { result } = renderHook(() => useSession("session-1"));
+
+    expect(result.current?.transcription).toEqual({
+      provider: "assemblyai",
+      model: "universal-3-5-pro",
+      languages: ["en", "es"],
+    });
+    expect(mocks.options?.sql).toContain("transcription_languages_json");
+  });
+
   it("deduplicates concurrent session preloads", async () => {
     mocks.execute.mockResolvedValue([]);
 

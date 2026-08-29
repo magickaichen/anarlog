@@ -19,7 +19,10 @@ export const LIVE_TRANSCRIPT_PREVIEW_SEGMENT_LIMIT = 200;
 export type BatchPersistCallback = (
   words: WordLike[],
   hints: RuntimeSpeakerHint[],
-  options?: { mode?: "append" | "replace" },
+  options?: {
+    mode?: "append" | "replace";
+    providerModel?: string;
+  },
 ) => void;
 
 export type LiveTranscriptPersistCallback = (

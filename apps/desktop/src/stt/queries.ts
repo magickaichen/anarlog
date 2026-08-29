@@ -8,6 +8,10 @@ import { executeTransaction, liveQueryClient, useLiveQuery } from "~/db";
 import { enqueueDatabaseWrite } from "~/db/write-queue";
 import type { SegmentKey } from "~/stt/live-segment";
 import { coalesceLiveTranscriptDeltas } from "~/stt/transcript-persistence-worker";
+import {
+  normalizeTranscriptionLanguages,
+  type TranscriptionPolicy,
+} from "~/stt/transcription-policy";
 import type { SpeakerHintWithId, WordWithId } from "~/stt/types";
 import {
   applyLiveTranscriptDelta,
@@ -61,10 +65,24 @@ type TranscriptInsert = {
   provider?: string;
   model?: string;
   language?: string;
+  languages?: string[];
+  providerModel?: string;
   words?: WordWithId[];
   speakerHints?: SpeakerHintWithId[];
   replaceSession?: boolean;
   replaceTranscriptId?: string;
+};
+
+type TranscriptTargetSqlRow = {
+  provider: string;
+  model: string;
+  language: string;
+  requested_languages_json: string;
+  provider_model: string;
+};
+
+export type TranscriptTarget = TranscriptionPolicy & {
+  providerModel?: string;
 };
 
 export type TranscriptRecord = {
@@ -330,9 +348,54 @@ export function useTranscriptHumans(
   return uniqueIds.length > 0 ? data : EMPTY_HUMANS;
 }
 
+export function useLatestSessionTranscriptTarget(
+  sessionId: string,
+): TranscriptTarget | null {
+  const { data } = useLiveQuery<
+    TranscriptTargetSqlRow,
+    TranscriptTarget | null
+  >({
+    sql: `
+        SELECT transcript.provider, transcript.model, transcript.language,
+          transcript.requested_languages_json, transcript.provider_model
+        FROM transcripts AS transcript
+        WHERE transcript.session_id = ?
+          AND transcript.deleted_at IS NULL
+          AND CASE
+            WHEN json_valid(transcript.words_json)
+              THEN json_array_length(transcript.words_json) > 0
+            ELSE 0
+          END
+        ORDER BY transcript.created_at DESC, transcript.id DESC
+        LIMIT 1
+      `,
+    params: [sessionId],
+    enabled: Boolean(sessionId),
+    mapRows: (rows) => {
+      const row = rows[0];
+      if (!row?.provider || !row.model) return null;
+      return {
+        provider: row.provider,
+        model: row.model,
+        languages: parseRequestedLanguages(
+          row.requested_languages_json,
+          row.language,
+        ),
+        ...(row.provider_model ? { providerModel: row.provider_model } : {}),
+      };
+    },
+  });
+
+  return sessionId ? (data ?? null) : null;
+}
+
 export function createTranscript(input: TranscriptInsert): Promise<void> {
   return enqueueDatabaseWrite(`transcript:${input.id}`, async () => {
     const now = new Date().toISOString();
+    const languages = normalizeTranscriptionLanguages(
+      input.languages ?? (input.language ? [input.language] : undefined),
+    );
+    const language = languages.length === 1 ? languages[0] : "";
     const statements: Array<{ sql: string; params: unknown[] }> = [];
 
     if (input.replaceSession) {
@@ -359,13 +422,13 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
       sql: `
         INSERT INTO transcripts (
           id, workspace_id, owner_user_id, session_id, source, provider,
-          model, language, started_at_ms, ended_at_ms, audio_attachment_id,
-          memo, words_json, speaker_hints_json, metadata_json, created_at,
-          updated_at, deleted_at
+          model, language, requested_languages_json, provider_model,
+          started_at_ms, ended_at_ms, audio_attachment_id, memo, words_json,
+          speaker_hints_json, metadata_json, created_at, updated_at, deleted_at
         )
         SELECT ?, session.workspace_id,
           COALESCE(NULLIF(?, ''), session.owner_user_id),
-          session.id, ?, ?, ?, ?, ?, ?, '',
+          session.id, ?, ?, ?, ?, ?, ?, ?, ?, '',
           ?, ?, ?, '{}', ?, ?, NULL
         FROM sessions AS session
         WHERE session.id = ? AND session.deleted_at IS NULL
@@ -376,7 +439,9 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
         input.source ?? "",
         input.provider ?? "",
         input.model ?? "",
-        input.language ?? "",
+        language,
+        JSON.stringify(languages),
+        input.providerModel ?? "",
         input.startedAt,
         input.endedAt ?? null,
         input.memo ?? "",
@@ -390,6 +455,20 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
 
     await executeTransaction(statements);
   });
+}
+
+function parseRequestedLanguages(value: string, language: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return normalizeTranscriptionLanguages(
+        parsed.filter((item): item is string => typeof item === "string"),
+      );
+    }
+  } catch {
+    // Fall through to the legacy language column.
+  }
+  return normalizeTranscriptionLanguages(language ? [language] : undefined);
 }
 
 export function createLiveTranscript(

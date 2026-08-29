@@ -172,6 +172,11 @@ export const sessions = sqliteTable(
     folderPath: text("folder_path").notNull().default(""),
     slug: text("slug").notNull().default(""),
     metadataJson: text("metadata_json").notNull().default("{}"),
+    transcriptionProvider: text("transcription_provider").notNull().default(""),
+    transcriptionModel: text("transcription_model").notNull().default(""),
+    transcriptionLanguagesJson: text("transcription_languages_json")
+      .notNull()
+      .default('["en"]'),
     deletedAt: text("deleted_at"),
   },
   (table) => [
@@ -302,6 +307,10 @@ export const transcripts = sqliteTable(
     provider: text("provider").notNull().default(""),
     model: text("model").notNull().default(""),
     language: text("language").notNull().default(""),
+    requestedLanguagesJson: text("requested_languages_json")
+      .notNull()
+      .default("[]"),
+    providerModel: text("provider_model").notNull().default(""),
     startedAtMs: integer("started_at_ms").notNull().default(0),
     endedAtMs: integer("ended_at_ms"),
     audioAttachmentId: text("audio_attachment_id").notNull().default(""),

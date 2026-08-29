@@ -47,6 +47,9 @@ pub struct SessionRow {
     pub slug: String,
     pub metadata_json: String,
     pub locked: i64,
+    pub transcription_provider: String,
+    pub transcription_model: String,
+    pub transcription_languages_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
@@ -78,6 +81,8 @@ pub struct SessionTranscriptRow {
     pub provider: String,
     pub model: String,
     pub language: String,
+    pub requested_languages_json: String,
+    pub provider_model: String,
     pub started_at_ms: i64,
     pub ended_at_ms: Option<i64>,
     pub audio_attachment_id: String,

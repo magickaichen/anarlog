@@ -446,7 +446,11 @@ describe("General Listener Slice", () => {
 
       expect(
         handleBatchResponse(sessionId, {
-          metadata: { duration: 120, timing_source: "provider_word" },
+          metadata: {
+            duration: 120,
+            timing_source: "provider_word",
+            speech_model: "universal-3-pro",
+          },
           results: {
             channels: [
               {
@@ -489,7 +493,7 @@ describe("General Listener Slice", () => {
           },
         ],
         [],
-        { mode: "replace" },
+        { mode: "replace", providerModel: "universal-3-pro" },
       );
       expect(store.getState().batch[sessionId]).toBeUndefined();
     });

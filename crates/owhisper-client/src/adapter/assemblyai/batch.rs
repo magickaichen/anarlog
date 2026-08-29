@@ -29,10 +29,20 @@ impl BatchSttAdapter for AssemblyAIAdapter {
     fn is_supported_languages(
         &self,
         languages: &[anlg_language::Language],
-        _model: Option<&str>,
+        model: Option<&str>,
     ) -> bool {
-        let primary_lang = languages.first().map(|l| l.iso639().code()).unwrap_or("en");
-        BATCH_LANGUAGES.contains(&primary_lang)
+        matches!(
+            model,
+            None | Some(
+                "universal-2"
+                    | "universal-3-pro"
+                    | "u3-rt-pro"
+                    | "universal-3-5-pro"
+                    | "universal-3-5-pro-realtime"
+            )
+        ) && languages
+            .iter()
+            .all(|language| BATCH_LANGUAGES.contains(&language.iso639().code()))
     }
 
     fn transcribe_file<'a, P: AsRef<Path> + Send + 'a>(
@@ -100,6 +110,9 @@ struct TranscriptResponse {
     audio_duration: Option<u64>,
     #[serde(default)]
     audio_channels: Option<u32>,
+    #[serde(default)]
+    #[serde(alias = "speech_model")]
+    speech_model_used: Option<String>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -395,6 +408,7 @@ impl AssemblyAIAdapter {
         BatchResponse {
             metadata: serde_json::json!({
                 "audio_duration": response.audio_duration,
+                "speech_model": response.speech_model_used,
             }),
             results: BatchResults { channels },
         }
@@ -405,6 +419,42 @@ impl AssemblyAIAdapter {
 mod tests {
     use super::*;
     use crate::http_client::create_client;
+
+    #[test]
+    fn batch_preflight_rejects_any_unsupported_requested_language() {
+        let adapter = AssemblyAIAdapter;
+
+        assert!(!adapter.is_supported_languages(
+            &[
+                anlg_language::ISO639::En.into(),
+                anlg_language::ISO639::Zu.into(),
+            ],
+            Some("universal-3-pro"),
+        ));
+    }
+
+    #[test]
+    fn batch_preflight_rejects_an_unknown_model() {
+        assert!(!AssemblyAIAdapter.is_supported_languages(
+            &[anlg_language::ISO639::En.into()],
+            Some("retired-model"),
+        ));
+    }
+
+    #[test]
+    fn transcript_response_reads_the_provider_reported_model() {
+        let response: TranscriptResponse = serde_json::from_value(serde_json::json!({
+            "id": "transcript-id",
+            "status": "completed",
+            "speech_model_used": "universal-3-pro"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            response.speech_model_used.as_deref(),
+            Some("universal-3-pro")
+        );
+    }
 
     #[test]
     fn batch_defaults_expand_to_current_model_stack() {
@@ -547,12 +597,20 @@ mod tests {
             confidence: Some(0.85),
             audio_duration: Some(1),
             audio_channels: Some(2),
+            speech_model_used: Some("universal-3-5-pro".to_string()),
             error: None,
         };
 
         let result = AssemblyAIAdapter::convert_to_batch_response(response);
 
         assert_eq!(result.results.channels.len(), 2);
+        assert_eq!(
+            result
+                .metadata
+                .get("speech_model")
+                .and_then(|value| value.as_str()),
+            Some("universal-3-5-pro")
+        );
         assert_eq!(result.results.channels[0].alternatives[0].words.len(), 2);
         assert_eq!(
             result.results.channels[0].alternatives[0].words[0].channel,
