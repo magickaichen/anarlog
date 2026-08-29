@@ -17,6 +17,21 @@ common_derives! {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderTurnCorrectionKind {
+    Pending,
+    Replacement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProviderTurnCorrection {
+    pub turn_order: u32,
+    pub kind: ProviderTurnCorrectionKind,
+}
+
+const PROVIDER_TURN_CORRECTION_KEY: &str = "provider_turn_correction";
+
 common_derives! {
     #[specta(rename = "StreamAlternatives")]
     #[cfg_attr(feature = "openapi", schema(as = StreamAlternatives))]
@@ -105,6 +120,22 @@ impl Default for Metadata {
             },
             extra: None,
         }
+    }
+}
+
+impl Metadata {
+    pub fn set_provider_turn_correction(&mut self, correction: ProviderTurnCorrection) {
+        let value = serde_json::to_value(correction).expect("provider turn correction serializes");
+        self.extra
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(PROVIDER_TURN_CORRECTION_KEY.to_string(), value);
+    }
+
+    pub fn provider_turn_correction(&self) -> Option<ProviderTurnCorrection> {
+        self.extra
+            .as_ref()?
+            .get(PROVIDER_TURN_CORRECTION_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
 }
 
@@ -238,5 +269,20 @@ mod test {
 
         let serialized = serde_json::to_string(&dg).unwrap();
         let _: StreamResponse = serde_json::from_str(&serialized).unwrap();
+    }
+
+    #[test]
+    fn provider_turn_correction_round_trips_through_metadata_extra() {
+        let correction = ProviderTurnCorrection {
+            turn_order: 0,
+            kind: ProviderTurnCorrectionKind::Replacement,
+        };
+        let mut metadata = Metadata::default();
+
+        metadata.set_provider_turn_correction(correction);
+        let serialized = serde_json::to_string(&metadata).unwrap();
+        let decoded: Metadata = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(decoded.provider_turn_correction(), Some(correction));
     }
 }

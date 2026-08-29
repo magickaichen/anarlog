@@ -90,9 +90,7 @@ pub fn render_transcript_segments(
             .map(|human| (human.human_id, human.name))
             .collect::<HashMap<_, _>>(),
     };
-    let max_speaker_number =
-        max_speaker_number_for_participants(&participant_human_ids, self_human_id.as_deref());
-    let mut labeler = SpeakerLabeler::from_segments(&all_segments, Some(&ctx), max_speaker_number);
+    let mut labeler = SpeakerLabeler::from_segments(&all_segments, Some(&ctx));
 
     all_segments
         .into_iter()
@@ -121,24 +119,6 @@ pub fn render_transcript_segments(
             })
         })
         .collect()
-}
-
-fn max_speaker_number_for_participants(
-    participant_human_ids: &[String],
-    self_human_id: Option<&str>,
-) -> Option<usize> {
-    let mut participants = participant_human_ids.to_vec();
-
-    if let Some(self_human_id) = self_human_id
-        && !participants.iter().any(|id| id == self_human_id)
-    {
-        participants.push(self_human_id.to_string());
-    }
-
-    participants.sort();
-    participants.dedup();
-
-    (participants.len() > 1).then_some(participants.len())
 }
 
 fn offset_transcript_data(
@@ -326,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn caps_unknown_speaker_labels_to_participant_count() {
+    fn does_not_cap_unknown_speaker_labels_to_participant_count() {
         let segments = render_transcript_segments(RenderTranscriptRequest {
             transcripts: vec![RenderTranscriptInput {
                 started_at: Some(0),
@@ -345,11 +325,35 @@ mod tests {
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0].speaker_label, "Speaker 1");
         assert_eq!(segments[1].speaker_label, "Speaker 2");
-        assert_eq!(segments[2].speaker_label, "Speaker 2");
+        assert_eq!(segments[2].speaker_label, "Speaker 3");
     }
 
     #[test]
-    fn labels_diarized_direct_mic_as_self_without_remote_participant() {
+    fn keeps_diarized_speakers_distinct_from_channel_participants() {
+        let segments = render_transcript_segments(RenderTranscriptRequest {
+            transcripts: vec![RenderTranscriptInput {
+                started_at: Some(0),
+                words: vec![
+                    word_si("w1", " hello", 0, 100, 1, 0),
+                    word_si("w2", " there", 200, 300, 1, 1),
+                ],
+                assignments: vec![],
+            }],
+            participant_human_ids: vec!["self".to_string(), "remote".to_string()],
+            self_human_id: Some("self".to_string()),
+            humans: vec![RenderTranscriptHuman {
+                human_id: "remote".to_string(),
+                name: "Remote".to_string(),
+            }],
+        });
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].speaker_label, "Speaker 1");
+        assert_eq!(segments[1].speaker_label, "Speaker 2");
+    }
+
+    #[test]
+    fn keeps_diarized_direct_mic_distinct_from_self_identity() {
         let segments = render_transcript_segments(RenderTranscriptRequest {
             transcripts: vec![RenderTranscriptInput {
                 started_at: Some(0),
@@ -365,9 +369,9 @@ mod tests {
         });
 
         assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].speaker_label, "Me");
+        assert_eq!(segments[0].speaker_label, "Speaker 1");
         assert_eq!(segments[0].key.speaker_index, Some(2));
-        assert_eq!(segments[0].key.speaker_human_id.as_deref(), Some("self"));
+        assert_eq!(segments[0].key.speaker_human_id, None);
     }
 
     #[test]

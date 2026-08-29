@@ -187,6 +187,45 @@ describe("buildRenderTranscriptRequestFromRows", () => {
     ]);
   });
 
+  it("keeps word-level speaker changes within one provider turn", () => {
+    const request = buildRenderTranscriptRequestFromRows([
+      {
+        words: [
+          {
+            id: "word-a",
+            text: " hello",
+            start_ms: 0,
+            end_ms: 100,
+            channel: 1,
+          },
+          {
+            id: "word-b",
+            text: " there",
+            start_ms: 100,
+            end_ms: 200,
+            channel: 1,
+          },
+        ],
+        speaker_hints: [
+          {
+            word_id: "word-a",
+            type: "provider_speaker_index",
+            value: { channel: 1, speaker_index: 0 },
+          },
+          {
+            word_id: "word-b",
+            type: "provider_speaker_index",
+            value: { channel: 1, speaker_index: 1 },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      request?.transcripts[0]?.words.map((word) => word.speaker_index),
+    ).toEqual([0, 1]);
+  });
+
   it("keeps an explicit matching-speaker assignment when its anchor lacks a provider hint", () => {
     const request = buildRenderTranscriptRequestFromRows([
       {

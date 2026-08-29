@@ -115,6 +115,83 @@ describe("TranscriptAccumulator", () => {
     expect(JSON.parse(store.readCell("speaker_hints"))).toEqual([]);
   });
 
+  it("replaces a revised turn with its word-level provider speakers", () => {
+    const store = createStore({});
+    const accumulator = createTranscriptAccumulator(store, "transcript-1", {
+      words: [],
+      hints: [],
+    });
+
+    accumulator.applyLiveDelta(
+      liveDelta([
+        {
+          id: "old-1",
+          text: " hello",
+          start_ms: 0,
+          end_ms: 100,
+          channel: 1,
+          state: "pending",
+          speaker_index: 0,
+        },
+        {
+          id: "old-2",
+          text: " there",
+          start_ms: 100,
+          end_ms: 200,
+          channel: 1,
+          state: "pending",
+          speaker_index: 0,
+        },
+      ]),
+    );
+    accumulator.applyLiveDelta(
+      liveDelta(
+        [
+          {
+            id: "revised-1",
+            text: " hello",
+            start_ms: 0,
+            end_ms: 100,
+            channel: 1,
+            state: "pending",
+            speaker_index: 0,
+          },
+          {
+            id: "revised-2",
+            text: " there",
+            start_ms: 100,
+            end_ms: 200,
+            channel: 1,
+            state: "pending",
+            speaker_index: 1,
+          },
+        ],
+        ["old-1", "old-2"],
+      ),
+    );
+    accumulator.dispose();
+
+    expect(
+      JSON.parse(store.readCell("words")).map(
+        (word: { id: string }) => word.id,
+      ),
+    ).toEqual(["revised-1", "revised-2"]);
+    expect(JSON.parse(store.readCell("speaker_hints"))).toEqual([
+      {
+        id: "revised-1:provider_speaker_index",
+        word_id: "revised-1",
+        type: "provider_speaker_index",
+        value: JSON.stringify({ channel: 1, speaker_index: 0 }),
+      },
+      {
+        id: "revised-2:provider_speaker_index",
+        word_id: "revised-2",
+        type: "provider_speaker_index",
+        value: JSON.stringify({ channel: 1, speaker_index: 1 }),
+      },
+    ]);
+  });
+
   it("keeps segment assignment word ids current when a scoped word is replaced", () => {
     const store = createStore({});
     const accumulator = createTranscriptAccumulator(store, "transcript-1", {

@@ -6,10 +6,7 @@ import type { RenderTranscriptRequest } from "@anlg/plugin-transcription";
 import { TRANSCRIPT_RENDER_CACHE_TIME_MS } from "../cache";
 import { useTranscriptRenderData } from "../render-request-hooks";
 
-import {
-  getMaxSpeakerNumberForParticipants,
-  type Segment,
-} from "~/stt/live-segment";
+import type { Segment } from "~/stt/live-segment";
 import {
   useSessionTranscriptMetadata,
   useTranscriptMetadata,
@@ -28,7 +25,6 @@ export function useRenderedTranscriptData(
   currentActive = false,
   captureGeneration = 0,
 ): {
-  maxSpeakerNumber?: number;
   request: RenderTranscriptRequest | null;
   segments: Segment[];
 } {
@@ -85,18 +81,7 @@ export function useRenderedTranscriptData(
     gcTime: TRANSCRIPT_RENDER_CACHE_TIME_MS,
   });
 
-  const maxSpeakerNumber = useMemo(
-    () =>
-      request
-        ? getMaxSpeakerNumberForParticipants(
-            request.participant_human_ids,
-            request.self_human_id,
-          )
-        : undefined,
-    [request],
-  );
-
-  return { maxSpeakerNumber, request, segments: data };
+  return { request, segments: data };
 }
 
 export function getTranscriptTimelineOffsetMs(

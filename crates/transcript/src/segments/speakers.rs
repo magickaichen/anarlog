@@ -99,7 +99,7 @@ pub(super) fn resolve_identities(
 }
 
 pub(super) fn assign_complete_channel_human_id(segment: &mut ProtoSegment, state: &SpeakerState) {
-    if segment.key.speaker_human_id.is_some() {
+    if segment.key.speaker_human_id.is_some() || segment.key.speaker_index.is_some() {
         return;
     }
 
@@ -133,6 +133,7 @@ fn apply_identity_rules(
     }
 
     if identity.human_id.is_none()
+        && identity.speaker_index.is_none()
         && state.complete_channels.contains(&word.channel)
         && let Some(human_id) = state.human_id_by_channel.get(&word.channel)
     {

@@ -63,6 +63,36 @@ impl ChannelState {
         finalize_words(to_finalize, state)
     }
 
+    /// Persist a provider-confirmed turn without holding its trailing word.
+    ///
+    /// Some providers revise speaker labels for an already-final turn. Those
+    /// replacements must bypass the forward-only watermark while still
+    /// clearing any overlapping preview state.
+    pub(super) fn apply_complete_final(
+        &mut self,
+        words: Vec<RawWord>,
+        state: WordState,
+    ) -> Vec<FinalizedWord> {
+        let Some(first) = words.first() else {
+            return vec![];
+        };
+        let final_start = first.start_ms;
+        let final_end = words.last().map_or(first.end_ms, |word| word.end_ms);
+
+        self.partials
+            .retain(|word| word.end_ms <= final_start || word.start_ms >= final_end);
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|word| word.end_ms > final_start && word.start_ms < final_end)
+        {
+            self.held = None;
+        }
+        self.watermark = self.watermark.max(final_end);
+
+        finalize_words(words, state)
+    }
+
     /// Update the partial buffer with a simple time-range replacement.
     ///
     /// Old preview words are promoted when partials are commit-worthy. For

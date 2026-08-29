@@ -434,7 +434,7 @@ fn propagates_direct_mic_channel_identity_forward() {
 }
 
 #[test]
-fn applies_direct_mic_channel_identity_to_provider_speakers() {
+fn leaves_provider_speakers_distinct_from_direct_mic_channel_identity() {
     let finals = vec![fw_si("0", 0, 100, 0, 2)];
     let assignments = vec![channel_human("self", ChannelProfile::DirectMic)];
     let opts = SegmentBuilderOptions {
@@ -445,7 +445,7 @@ fn applies_direct_mic_channel_identity_to_provider_speakers() {
     let result = build_segments(&finals, &[], &assignments, Some(&opts));
 
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].key, key_speaker_human(0, 2, "self"));
+    assert_eq!(result[0].key, key_speaker(0, 2));
 }
 
 #[test]

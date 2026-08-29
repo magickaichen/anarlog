@@ -12,7 +12,6 @@ pub struct SpeakerLabelContext {
 pub struct SpeakerLabeler {
     unknown_speaker_map: HashMap<SegmentKey, usize>,
     next_index: usize,
-    max_unknown_speaker_number: Option<usize>,
 }
 
 impl SpeakerLabeler {
@@ -20,21 +19,11 @@ impl SpeakerLabeler {
         Self {
             unknown_speaker_map: HashMap::new(),
             next_index: 1,
-            max_unknown_speaker_number: None,
         }
     }
 
-    pub fn with_max_unknown_speaker_number(mut self, max: Option<usize>) -> Self {
-        self.max_unknown_speaker_number = max;
-        self
-    }
-
-    pub fn from_segments(
-        segments: &[Segment],
-        ctx: Option<&SpeakerLabelContext>,
-        max_unknown_speaker_number: Option<usize>,
-    ) -> Self {
-        let mut labeler = Self::new().with_max_unknown_speaker_number(max_unknown_speaker_number);
+    pub fn from_segments(segments: &[Segment], ctx: Option<&SpeakerLabelContext>) -> Self {
+        let mut labeler = Self::new();
         for segment in segments {
             if !segment.key.is_known_speaker(ctx) {
                 labeler.unknown_speaker_number(&segment.key);
@@ -52,10 +41,7 @@ impl SpeakerLabeler {
             return *existing;
         }
 
-        let next = self
-            .max_unknown_speaker_number
-            .map(|max| self.next_index.min(max))
-            .unwrap_or(self.next_index);
+        let next = self.next_index;
         self.unknown_speaker_map.insert(key.clone(), next);
         self.next_index += 1;
         next
@@ -73,7 +59,7 @@ impl SegmentKey {
             Some(SpeakerLabelContext {
                 self_human_id: Some(_),
                 ..
-            }) if self.channel == ChannelProfile::DirectMic
+            }) if self.channel == ChannelProfile::DirectMic && self.speaker_index.is_none()
         )
     }
 }
@@ -92,6 +78,7 @@ pub fn render_speaker_label(
         }
 
         if key.channel == ChannelProfile::DirectMic
+            && key.speaker_index.is_none()
             && let Some(self_human_id) = ctx.self_human_id.as_ref()
         {
             if let Some(name) = ctx.human_name_by_id.get(self_human_id) {
@@ -165,8 +152,8 @@ mod tests {
     }
 
     #[test]
-    fn caps_unknown_speaker_numbers() {
-        let mut labeler = SpeakerLabeler::new().with_max_unknown_speaker_number(Some(2));
+    fn does_not_cap_unknown_speaker_numbers() {
+        let mut labeler = SpeakerLabeler::new();
         let a = SegmentKey {
             channel: ChannelProfile::DirectMic,
             speaker_index: Some(0),
@@ -185,11 +172,11 @@ mod tests {
 
         assert_eq!(labeler.label_for(&a, None), "Speaker 1");
         assert_eq!(labeler.label_for(&b, None), "Speaker 2");
-        assert_eq!(labeler.label_for(&c, None), "Speaker 2");
+        assert_eq!(labeler.label_for(&c, None), "Speaker 3");
     }
 
     #[test]
-    fn treats_direct_mic_with_provider_speaker_as_self() {
+    fn treats_direct_mic_with_provider_speaker_as_diarized() {
         let ctx = SpeakerLabelContext {
             self_human_id: Some("self".to_string()),
             human_name_by_id: HashMap::new(),
@@ -200,7 +187,7 @@ mod tests {
             speaker_human_id: None,
         };
 
-        assert!(key.is_known_speaker(Some(&ctx)));
-        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "You");
+        assert!(!key.is_known_speaker(Some(&ctx)));
+        assert_eq!(render_speaker_label(&key, Some(&ctx), None), "Speaker 3");
     }
 }

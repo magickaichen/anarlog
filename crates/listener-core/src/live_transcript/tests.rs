@@ -1,3 +1,4 @@
+use owhisper_client::{AssemblyAIAdapter, RealtimeSttAdapter};
 use owhisper_interface::stream::{Alternatives, Channel, Metadata, ModelInfo, Word};
 
 use super::*;
@@ -614,56 +615,6 @@ fn apple_speech_engine_drops_unfinalized_hypothesis_on_flush() {
 }
 
 #[test]
-fn clamps_provider_speakers_to_participant_count() {
-    let max_speaker_index = max_speaker_index_for_participants(
-        &[
-            "self".to_string(),
-            "remote-a".to_string(),
-            "remote-b".to_string(),
-        ],
-        Some("self"),
-    );
-    let mut high_word = word("too-high", 0.0, 0.5);
-    high_word.speaker = Some(2);
-    let mut negative_word = word("negative", 0.5, 1.0);
-    negative_word.speaker = Some(-1);
-    let mut response = transcript_response_at(
-        "too-high negative",
-        vec![high_word, negative_word],
-        true,
-        0,
-        0.0,
-        1.0,
-    );
-
-    clamp_response_speaker_indices(&mut response, max_speaker_index);
-
-    let StreamResponse::TranscriptResponse { channel, .. } = response else {
-        panic!("expected transcript response");
-    };
-    let words = &channel.alternatives[0].words;
-
-    assert_eq!(words[0].speaker, Some(1));
-    assert_eq!(words[1].speaker, Some(0));
-}
-
-#[test]
-fn clamps_single_remote_speaker_to_zero() {
-    let max_speaker_index =
-        max_speaker_index_for_participants(&["remote".to_string()], Some("self"));
-    let mut high_word = word("too-high", 0.0, 0.5);
-    high_word.speaker = Some(2);
-    let mut response = transcript_response_at("too-high", vec![high_word], true, 1, 0.0, 0.5);
-
-    clamp_response_speaker_indices(&mut response, max_speaker_index);
-
-    let StreamResponse::TranscriptResponse { channel, .. } = response else {
-        panic!("expected transcript response");
-    };
-    assert_eq!(channel.alternatives[0].words[0].speaker, Some(0));
-}
-
-#[test]
 fn live_transcript_delta_keeps_speaker_index_on_words() {
     let delta = TranscriptDelta {
         new_words: vec![FinalizedWord {
@@ -689,4 +640,161 @@ fn live_transcript_delta_keeps_speaker_index_on_words() {
     assert_eq!(converted.new_words[0].speaker_index, Some(1));
     assert_eq!(converted.partials[0].speaker_index, Some(2));
     assert_eq!(converted.replaced_ids, vec!["replaced"]);
+}
+
+#[test]
+fn assemblyai_revision_replaces_only_the_matching_persisted_turn() {
+    let adapter = AssemblyAIAdapter::default();
+    let mut engine = LiveTranscriptEngine::new(
+        "assemblyai",
+        &["self".to_string(), "remote".to_string()],
+        Some("self"),
+    );
+    let first_response = adapter.parse_response(
+        r#"{
+            "type":"Turn",
+            "turn_order":0,
+            "turn_is_formatted":true,
+            "end_of_turn":true,
+            "transcript":"Hello there",
+            "speaker_label":"A",
+            "words":[
+                {"text":"Hello","start":0,"end":400,"confidence":0.9,"word_is_final":true,"speaker":"A"},
+                {"text":"there","start":400,"end":800,"confidence":0.9,"word_is_final":true,"speaker":"A"}
+            ]
+        }"#,
+    );
+    let second_response = adapter.parse_response(
+        r#"{
+            "type":"Turn",
+            "turn_order":1,
+            "turn_is_formatted":true,
+            "end_of_turn":true,
+            "transcript":"Unchanged",
+            "speaker_label":"C",
+            "words":[
+                {"text":"Unchanged","start":900,"end":1300,"confidence":0.9,"word_is_final":true,"speaker":"C"}
+            ]
+        }"#,
+    );
+
+    let first = engine.process(&first_response[0]).expect("first turn");
+    let second = engine.process(&second_response[0]).expect("second turn");
+    assert_eq!(first.transcript_delta.new_words.len(), 2);
+    assert_eq!(second.transcript_delta.new_words.len(), 1);
+    let first_ids = first
+        .transcript_delta
+        .new_words
+        .iter()
+        .map(|word| word.id.clone())
+        .collect::<Vec<_>>();
+    let second_ids = second
+        .transcript_delta
+        .new_words
+        .iter()
+        .map(|word| word.id.clone())
+        .collect::<Vec<_>>();
+
+    let revision_response = adapter.parse_response(
+        r#"{
+            "type":"SpeakerRevision",
+            "revisions":[{
+                "turn_order":0,
+                "speaker_label":"A",
+                "words":[
+                    {"text":"Hello","start":0,"end":400,"confidence":0.9,"word_is_final":true,"speaker":"A"},
+                    {"text":"there","start":400,"end":800,"confidence":0.9,"word_is_final":true,"speaker":"B"}
+                ]
+            }]
+        }"#,
+    );
+    let revision = engine
+        .process(&revision_response[0])
+        .expect("speaker revision");
+
+    assert_eq!(revision.transcript_delta.replaced_ids, first_ids);
+    assert!(
+        revision
+            .transcript_delta
+            .replaced_ids
+            .iter()
+            .all(|id| !second_ids.contains(id))
+    );
+    assert_eq!(
+        revision
+            .transcript_delta
+            .new_words
+            .iter()
+            .map(|word| (word.text.trim(), word.speaker_index, word.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Hello", Some(0), anlg_transcript::WordState::Pending),
+            ("there", Some(1), anlg_transcript::WordState::Pending),
+        ]
+    );
+    let segment_delta = revision.segment_delta.expect("segment revision");
+    assert_eq!(
+        segment_delta
+            .upserts
+            .iter()
+            .map(|segment| segment.key.speaker_index)
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(1)]
+    );
+
+    let flush = engine.flush().expect("final promotion");
+    assert_eq!(
+        flush
+            .transcript_delta
+            .new_words
+            .iter()
+            .filter(|word| word.start_ms < 800)
+            .map(|word| (word.text.trim(), word.speaker_index, word.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Hello", Some(0), anlg_transcript::WordState::Final),
+            ("there", Some(1), anlg_transcript::WordState::Final),
+        ]
+    );
+}
+
+#[test]
+fn assemblyai_short_pending_turn_keeps_text_and_anonymous_speaker() {
+    let adapter = AssemblyAIAdapter::default();
+    let mut engine = LiveTranscriptEngine::new("assemblyai", &[], None);
+    let responses = adapter.parse_response(
+        r#"{
+            "type":"Turn",
+            "turn_order":0,
+            "turn_is_formatted":true,
+            "end_of_turn":true,
+            "transcript":"Hello",
+            "speaker_label":"PENDING",
+            "words":[
+                {"text":"Hello","start":0,"end":400,"confidence":0.9,"word_is_final":true,"speaker":"PENDING"}
+            ]
+        }"#,
+    );
+
+    let update = engine.process(&responses[0]).expect("short final turn");
+
+    assert_eq!(update.transcript_delta.new_words.len(), 1);
+    assert_eq!(update.transcript_delta.new_words[0].text.trim(), "Hello");
+    assert_eq!(update.transcript_delta.new_words[0].speaker_index, None);
+    assert_eq!(
+        update.transcript_delta.new_words[0].state,
+        anlg_transcript::WordState::Pending
+    );
+}
+
+#[test]
+fn assemblyai_provider_speakers_are_not_clamped_to_participant_count() {
+    let mut engine = LiveTranscriptEngine::new("assemblyai", &["remote".to_string()], Some("self"));
+    let mut provider_word = word("third", 0.0, 0.5);
+    provider_word.speaker = Some(2);
+    let response = transcript_response_at("third", vec![provider_word], true, 1, 0.0, 0.5);
+
+    let update = engine.process(&response).expect("provider speaker");
+
+    assert_eq!(update.transcript_delta.partials[0].speaker_index, Some(2));
 }

@@ -36,7 +36,6 @@ import { useVirtualSegments, VirtualSegmentRow } from "./virtual-segments";
 
 import {
   applyRenderRequestIdentitiesToSegments,
-  getMaxSpeakerNumberForParticipants,
   mergeRenderedAndLiveSegments,
   SegmentKeyUtils,
   type RenderLabelContext,
@@ -115,11 +114,11 @@ function PersistedTranscript({
   audioExists: boolean;
   editMode: boolean;
 }) {
-  const {
-    maxSpeakerNumber,
-    request,
-    segments: storedSegments,
-  } = useRenderedTranscriptData(transcriptId, currentActive, captureGeneration);
+  const { request, segments: storedSegments } = useRenderedTranscriptData(
+    transcriptId,
+    currentActive,
+    captureGeneration,
+  );
   const mergedSegments = useMemo(() => {
     const merged = mergeRenderedAndLiveSegments(
       storedSegments,
@@ -142,7 +141,6 @@ function PersistedTranscript({
       seek={seek}
       startPlayback={startPlayback}
       audioExists={audioExists}
-      maxSpeakerNumber={maxSpeakerNumber}
       request={request}
       editMode={editMode}
     />
@@ -159,7 +157,6 @@ function TranscriptSegments({
   seek,
   startPlayback,
   audioExists,
-  maxSpeakerNumber,
   request,
   editMode,
 }: {
@@ -172,7 +169,6 @@ function TranscriptSegments({
   seek: (sec: number) => void;
   startPlayback: () => void;
   audioExists: boolean;
-  maxSpeakerNumber?: number;
   request: RenderTranscriptRequest | null;
   editMode: boolean;
 }) {
@@ -211,7 +207,6 @@ function TranscriptSegments({
       seek={seek}
       startPlayback={startPlayback}
       audioExists={audioExists}
-      maxSpeakerNumber={maxSpeakerNumber}
       editMode={editMode}
     />
   );
@@ -230,7 +225,6 @@ const SegmentsList = memo(
     seek,
     startPlayback,
     audioExists,
-    maxSpeakerNumber,
     editMode,
   }: {
     segments: Segment[];
@@ -244,27 +238,14 @@ const SegmentsList = memo(
     seek: (sec: number) => void;
     startPlayback: () => void;
     audioExists: boolean;
-    maxSpeakerNumber?: number;
     editMode: boolean;
   }) => {
     const search = useSearch();
-    const inferredMaxSpeakerNumber = labelContext
-      ? getMaxSpeakerNumberForParticipants(
-          labelContext.getParticipantHumanIds?.() ?? [],
-          labelContext.getSelfHumanId(),
-        )
-      : undefined;
-    const resolvedMaxSpeakerNumber =
-      maxSpeakerNumber ?? inferredMaxSpeakerNumber;
     const speakerLabelManager = useMemo(() => {
       return labelContext
-        ? SpeakerLabelManager.fromSegments(
-            segments,
-            labelContext,
-            resolvedMaxSpeakerNumber,
-          )
-        : new SpeakerLabelManager(resolvedMaxSpeakerNumber);
-    }, [labelContext, resolvedMaxSpeakerNumber, segments]);
+        ? SpeakerLabelManager.fromSegments(segments, labelContext)
+        : new SpeakerLabelManager();
+    }, [labelContext, segments]);
     const speakerLabels = useMemo(() => {
       const labels = new Map<Segment, string>();
       for (const segment of segments) {
@@ -391,7 +372,6 @@ const SegmentsList = memo(
       prevProps.shouldScrollToEnd === nextProps.shouldScrollToEnd &&
       prevProps.currentMs === nextProps.currentMs &&
       prevProps.audioExists === nextProps.audioExists &&
-      prevProps.maxSpeakerNumber === nextProps.maxSpeakerNumber &&
       prevProps.editMode === nextProps.editMode &&
       prevProps.seek === nextProps.seek &&
       prevProps.startPlayback === nextProps.startPlayback &&
