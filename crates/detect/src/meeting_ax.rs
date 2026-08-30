@@ -35,6 +35,8 @@ mod linux;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod node;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod participants;
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod platform;
 mod types;
 #[cfg(target_os = "windows")]
@@ -68,6 +70,8 @@ use node::{
     is_platform_active_call_control, is_platform_meeting_control, node_has_positive_bounds,
     node_labels, node_needs_bounds, searchable_node_text, teams_has_active_call_evidence,
 };
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
+use participants::extract_observed_participants;
 #[cfg(any(test, target_os = "linux", target_os = "windows"))]
 use platform::is_browser_active_call_control;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_imports))]
@@ -92,8 +96,8 @@ use types::{
 use types::{AxChatElement, SlackHuddleRoot};
 pub use types::{
     AxRect, MeetingAccessibilityInspection, MeetingApp, MeetingCapturedChatMessage,
-    MeetingChatCaptureResult, MeetingChatDirection, MeetingChatSendResult, MeetingPlatform,
-    MeetingSurface,
+    MeetingChatCaptureResult, MeetingChatDirection, MeetingChatSendResult,
+    MeetingObservedParticipant, MeetingParticipantCaptureResult, MeetingPlatform, MeetingSurface,
 };
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -842,6 +846,122 @@ pub fn capture_meeting_chat_messages(_bundle_ids: Vec<String>) -> MeetingChatCap
         context_id: None,
         messages: Vec::new(),
         warnings: vec!["meeting chat AX capture is only available on macOS and Linux".to_string()],
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn capture_meeting_participants(bundle_ids: Vec<String>) -> MeetingParticipantCaptureResult {
+    let scoped_bundle_ids = select_active_bundle_ids(
+        MEETING_APP_BUNDLES.iter().map(|bundle| bundle.id),
+        &bundle_ids,
+    );
+    if scoped_bundle_ids.len() != 1 {
+        return MeetingParticipantCaptureResult {
+            app: None,
+            platform: MeetingPlatform::Unknown,
+            surface: MeetingSurface::Unknown,
+            participants: Vec::new(),
+            warnings: vec![format!(
+                "meeting participant capture requires exactly one active supported meeting app; received {}",
+                scoped_bundle_ids.len()
+            )],
+        };
+    }
+
+    if !macos_accessibility_client::accessibility::application_is_trusted() {
+        return MeetingParticipantCaptureResult {
+            app: None,
+            platform: MeetingPlatform::Unknown,
+            surface: MeetingSurface::Unknown,
+            participants: Vec::new(),
+            warnings: vec!["macOS accessibility permission is not trusted".to_string()],
+        };
+    }
+
+    let bundle_id = scoped_bundle_ids[0];
+    let bundle_platform = classify_bundle(bundle_id);
+    let bundle_surface = classify_surface(bundle_id, &bundle_platform);
+    let mut detected_platform = bundle_platform.clone();
+    let mut warnings = Vec::new();
+    let mut candidates = Vec::new();
+
+    if is_browser_bundle(bundle_id) {
+        let mut browser_roots = Vec::new();
+        let mut browser_scope_poisoned = false;
+        for (app, pid) in running_apps_for_bundle(bundle_id) {
+            let ax_app = ax::UiElement::with_app_pid(pid);
+            let _ = ax_app.set_messaging_timeout_secs(0.6);
+            let (roots, has_unscoped_meeting_window) =
+                collect_browser_meeting_roots(&ax_app, &mut warnings);
+            browser_scope_poisoned |= has_unscoped_meeting_window;
+            browser_roots.extend(roots.into_iter().map(|root| (app.clone(), root)));
+        }
+
+        if !browser_scope_poisoned && browser_roots.len() == 1 {
+            let (app, root) = browser_roots.pop().unwrap();
+            detected_platform = root.platform.clone();
+            if root.platform == MeetingPlatform::GoogleMeet {
+                candidates.push((app, root.platform, MeetingSurface::Web, root.nodes));
+            }
+        } else {
+            warnings.push(format!(
+                "meeting participant capture requires exactly one completely scoped browser meeting root; found {}",
+                browser_roots.len()
+            ));
+        }
+    } else if matches!(
+        bundle_platform,
+        MeetingPlatform::Zoom | MeetingPlatform::MicrosoftTeams
+    ) {
+        for (app, pid) in running_apps_for_bundle(bundle_id) {
+            let ax_app = ax::UiElement::with_app_pid(pid);
+            let _ = ax_app.set_messaging_timeout_secs(0.6);
+            for root in collect_native_meeting_roots(&ax_app, &bundle_platform, &mut warnings) {
+                candidates.push((
+                    app.clone(),
+                    bundle_platform.clone(),
+                    MeetingSurface::Native,
+                    root.nodes,
+                ));
+            }
+        }
+    }
+
+    if candidates.len() != 1 {
+        warnings.push(format!(
+            "meeting participant capture requires exactly one validated active meeting surface; found {}",
+            candidates.len()
+        ));
+        return MeetingParticipantCaptureResult {
+            app: None,
+            platform: detected_platform,
+            surface: bundle_surface,
+            participants: Vec::new(),
+            warnings,
+        };
+    }
+
+    let (app, platform, surface, nodes) = candidates.pop().unwrap();
+    let participants = extract_observed_participants(&platform, &nodes);
+    MeetingParticipantCaptureResult {
+        app: Some(app),
+        platform,
+        surface,
+        participants,
+        warnings,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn capture_meeting_participants(_bundle_ids: Vec<String>) -> MeetingParticipantCaptureResult {
+    MeetingParticipantCaptureResult {
+        app: None,
+        platform: MeetingPlatform::Unknown,
+        surface: MeetingSurface::Unknown,
+        participants: Vec::new(),
+        warnings: vec![
+            "meeting participant AX capture is currently only available on macOS".to_string(),
+        ],
     }
 }
 

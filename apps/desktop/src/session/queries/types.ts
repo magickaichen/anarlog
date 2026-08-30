@@ -53,3 +53,9 @@ export type SessionParticipantRecord = {
   organizationId: string;
   organizationName: string;
 };
+
+export type SessionSpeakerCandidate = {
+  humanId: string;
+  name: string;
+  source: "observed" | "calendar" | "manual";
+};

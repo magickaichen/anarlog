@@ -73,6 +73,7 @@ mod capture_identity;
 mod chat_scope;
 mod inspection;
 mod message_parsing;
+mod participants;
 mod slack_huddle;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -92,5 +93,6 @@ fn inspect_meeting_accessibility_does_not_panic_without_meeting_apps() {
 async fn meeting_ax_sync_entrypoints_do_not_panic_inside_tokio_runtime() {
     let _ = inspect_meeting_accessibility();
     let _ = capture_meeting_chat_messages(vec!["us.zoom.Zoom".to_string()]);
+    let _ = capture_meeting_participants(vec!["us.zoom.Zoom".to_string()]);
     let _ = send_meeting_chat_message("hello".to_string(), vec!["us.zoom.Zoom".to_string()]);
 }

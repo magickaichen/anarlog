@@ -414,6 +414,13 @@ pub const APP_MIGRATION_STEPS: &[anlg_db_migrate::MigrationStep] = &[
         sql: include_str!("../migrations/20260829100100_transcript_transcription_target.sql"),
     },
     anlg_db_migrate::MigrationStep {
+        id: "20260830100000_session_participant_observation",
+        scope: anlg_db_migrate::MigrationScope::CloudsyncAlter {
+            table_name: "session_participants",
+        },
+        sql: include_str!("../migrations/20260830100000_session_participant_observation.sql"),
+    },
+    anlg_db_migrate::MigrationStep {
         id: "20260903100000_transcript_refinement_jobs",
         scope: anlg_db_migrate::MigrationScope::Plain,
         sql: include_str!("../migrations/20260903100000_transcript_refinement_jobs.sql"),

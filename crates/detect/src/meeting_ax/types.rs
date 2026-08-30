@@ -103,6 +103,22 @@ pub struct MeetingChatCaptureResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingObservedParticipant {
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingParticipantCaptureResult {
+    pub app: Option<MeetingApp>,
+    pub platform: MeetingPlatform,
+    pub surface: MeetingSurface,
+    pub participants: Vec<MeetingObservedParticipant>,
+    pub warnings: Vec<String>,
+}
+
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 #[derive(Debug, Clone)]
 pub(super) struct AxNode {
