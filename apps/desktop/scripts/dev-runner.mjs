@@ -18,9 +18,13 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDirectory = dirname(scriptPath);
-const appIdentifier = "com.hyprnote.dev";
-const appName = "Anarlog Dev";
-const executableName = "anarlog-dev";
+const sourceDirectory = resolve(scriptDirectory, "../src-tauri");
+const tauriConfig = JSON.parse(
+  readFileSync(join(sourceDirectory, "tauri.conf.json"), "utf8"),
+);
+const appIdentifier = tauriConfig.identifier;
+const appName = tauriConfig.productName;
+const executableName = tauriConfig.mainBinaryName;
 const signalExitCodes = { SIGINT: 130, SIGTERM: 143 };
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
@@ -133,8 +137,6 @@ function prepareMacOSAppBundle(binary) {
   const executableDirectory = join(contentsDirectory, "MacOS");
   const resourcesDirectory = join(contentsDirectory, "Resources");
   const targetDirectory = dirname(binary);
-  const sourceDirectory = resolve(scriptDirectory, "../src-tauri");
-
   mkdirSync(executableDirectory, { recursive: true });
   mkdirSync(resourcesDirectory, { recursive: true });
 
@@ -275,7 +277,7 @@ function guardMacOSApp(parentPid, appBundle, outputDirectory) {
   }, 250);
 }
 
-function followMacOSAppOutput() {
+export function followMacOSAppOutput() {
   const outputDirectory = mkdtempSync(join(tmpdir(), "anarlog-dev-"));
   const paths = {
     stderr: join(outputDirectory, "dev-runner.stderr.log"),
