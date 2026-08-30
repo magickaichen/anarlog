@@ -1,3 +1,5 @@
+import type { TranscriptionPolicy } from "~/stt/transcription-policy";
+
 export type SessionRecord = {
   id: string;
   user_id: string;
@@ -8,6 +10,7 @@ export type SessionRecord = {
   raw_md: string;
   raw_template_id: string;
   locked: boolean;
+  transcription: TranscriptionPolicy | null;
 };
 
 export type SessionChanges = Partial<
@@ -21,7 +24,7 @@ export type SessionChanges = Partial<
     | "raw_template_id"
     | "title"
   >
->;
+> & { transcription?: TranscriptionPolicy };
 
 export type SessionSummaryRecord = {
   id: string;

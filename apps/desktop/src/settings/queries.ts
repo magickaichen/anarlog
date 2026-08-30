@@ -122,11 +122,11 @@ export async function initializeApplicationSettings(): Promise<void> {
     updates.current_stt_model = normalizedSttSelection.model;
   }
 
-  if (languageResult?.status === "ok" && languageResult.data.length > 0) {
-    if (!stored.hasValues.has("ai_language")) {
-      updates.ai_language = languageResult.data[0];
-    }
-
+  if (
+    languageResult?.status === "ok" &&
+    languageResult.data.length > 0 &&
+    stored.hasValues.has("ai_language")
+  ) {
     const storedSpokenLanguages = parseStringArray(
       stored.values.spoken_languages ?? "[]",
     );
@@ -136,7 +136,7 @@ export async function initializeApplicationSettings(): Promise<void> {
       storedSpokenLanguages.every(
         (language, index) => language === languageResult.data[index],
       );
-    if (!stored.hasValues.has("spoken_languages") || isSystemDefault) {
+    if (isSystemDefault) {
       updates.spoken_languages = JSON.stringify(languageResult.data.slice(1));
     }
   }

@@ -57,6 +57,7 @@ import {
   removeHumanSpeakerAssignments,
   updateTranscriptSegmentText,
   useSessionParticipantHumanIds,
+  useLatestSessionTranscriptTarget,
   useSessionTranscriptMetadata,
   useSessionTranscripts,
   useTranscript,
@@ -112,6 +113,56 @@ describe("transcript SQLite queries", () => {
     expect(mocks.queryOptions[0]?.sql).toContain(
       "ORDER BY transcript.started_at_ms, transcript.created_at, transcript.id",
     );
+  });
+
+  it("loads the current final transcript target for re-transcription", () => {
+    mocks.transcriptRows = [
+      {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        language: "en",
+        requested_languages_json: '["en"]',
+        provider_model: "universal-3-5-pro",
+      },
+    ];
+
+    const { result } = renderHook(() =>
+      useLatestSessionTranscriptTarget("session-1"),
+    );
+
+    expect(result.current).toEqual({
+      provider: "assemblyai",
+      model: "universal-3-5-pro",
+      languages: ["en"],
+      providerModel: "universal-3-5-pro",
+    });
+    expect(mocks.queryOptions[0]?.sql).toContain("requested_languages_json");
+    expect(mocks.queryOptions[0]?.sql).toContain("json_array_length");
+    expect(mocks.queryOptions[0]?.sql).toContain(
+      "ORDER BY transcript.created_at DESC",
+    );
+  });
+
+  it("uses the legacy transcript language when migrated target languages are empty", () => {
+    mocks.transcriptRows = [
+      {
+        provider: "assemblyai",
+        model: "universal-2",
+        language: "es",
+        requested_languages_json: "[]",
+        provider_model: "",
+      },
+    ];
+
+    const { result } = renderHook(() =>
+      useLatestSessionTranscriptTarget("session-1"),
+    );
+
+    expect(result.current).toEqual({
+      provider: "assemblyai",
+      model: "universal-2",
+      languages: ["es"],
+    });
   });
 
   it("materializes ordered live journal chunks on read", () => {
@@ -339,20 +390,22 @@ describe("transcript SQLite queries", () => {
     expect(statements[0]?.sql).toContain(
       "COALESCE(NULLIF(?, ''), session.owner_user_id)",
     );
-    expect(statements[0]?.params.slice(0, 8)).toEqual([
+    expect(statements[0]?.params.slice(0, 10)).toEqual([
       "transcript-1",
       "user-1",
       "live_capture",
       "soniox",
       "stt-rt-v3",
+      "en",
+      '["en"]',
       "",
       1000,
       null,
     ]);
-    expect(JSON.parse(String(statements[0]?.params[9]))).toEqual([
+    expect(JSON.parse(String(statements[0]?.params[11]))).toEqual([
       expect.objectContaining({ id: "word-1", text: "Hello" }),
     ]);
-    expect(JSON.parse(String(statements[0]?.params[10]))).toEqual([
+    expect(JSON.parse(String(statements[0]?.params[12]))).toEqual([
       expect.objectContaining({
         word_id: "word-1",
         type: "provider_speaker_index",
@@ -360,6 +413,36 @@ describe("transcript SQLite queries", () => {
     ]);
     const params = statements[0]?.params ?? [];
     expect(params[params.length - 1]).toBe("session-1");
+  });
+
+  it("records the requested and provider-reported batch target", async () => {
+    await createTranscript({
+      id: "transcript-1",
+      sessionId: "session-1",
+      ownerUserId: "user-1",
+      createdAt: "2026-08-29T09:00:00.000Z",
+      startedAt: 1000,
+      source: "batch_transcription",
+      provider: "assemblyai",
+      model: "universal-3-5-pro",
+      languages: ["en", "es"],
+      providerModel: "universal-3-5-pro",
+    });
+
+    const statement = mocks.executeTransaction.mock.calls[0]?.[0]?.[0] as {
+      sql: string;
+      params: unknown[];
+    };
+    expect(statement.sql).toContain("requested_languages_json");
+    expect(statement.sql).toContain("provider_model");
+    expect(statement.params).toEqual(
+      expect.arrayContaining([
+        "assemblyai",
+        "universal-3-5-pro",
+        '["en","es"]',
+        "universal-3-5-pro",
+      ]),
+    );
   });
 
   it("tombstones old session transcripts in the same replacement transaction", async () => {

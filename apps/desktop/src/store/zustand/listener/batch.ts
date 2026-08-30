@@ -125,7 +125,15 @@ export const createBatchSlice = <T extends BatchState>(
       return false;
     }
 
-    persist?.(words, hints, { mode: "replace" });
+    const providerModel =
+      response.metadata &&
+      typeof response.metadata === "object" &&
+      "speech_model" in response.metadata &&
+      typeof response.metadata.speech_model === "string"
+        ? response.metadata.speech_model
+        : undefined;
+
+    persist?.(words, hints, { mode: "replace", providerModel });
 
     set((state) => {
       if (!state.batch[sessionId]) {

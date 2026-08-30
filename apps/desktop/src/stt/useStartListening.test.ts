@@ -32,6 +32,7 @@ const {
   runBatchMock,
   useListenerMock,
   useSessionMock,
+  updateSessionMock,
   useSessionHasTranscriptMock,
   useSessionParticipantHumanIdsMock,
   createLiveTranscriptMock,
@@ -84,6 +85,7 @@ const {
   runBatchMock: vi.fn(),
   useListenerMock: vi.fn(),
   useSessionMock: vi.fn(),
+  updateSessionMock: vi.fn(),
   useSessionHasTranscriptMock: vi.fn(),
   useSessionParticipantHumanIdsMock: vi.fn(),
   createLiveTranscriptMock: vi.fn(),
@@ -233,6 +235,7 @@ vi.mock("~/session/utils", () => ({
 vi.mock("~/session/queries", () => ({
   useSession: useSessionMock,
   useSessionTranscriptExistence: useSessionHasTranscriptMock,
+  updateSession: updateSessionMock,
 }));
 
 vi.mock("~/session-sharing/editor-activity", () => ({
@@ -469,6 +472,7 @@ describe("useStartListening", () => {
       user_id: "user-1",
       raw_md: "Existing memo",
     });
+    updateSessionMock.mockResolvedValue(undefined);
     useSessionHasTranscriptMock.mockReturnValue(false);
     useSessionParticipantHumanIdsMock.mockReturnValue([]);
     createLiveTranscriptMock.mockResolvedValue(undefined);
@@ -533,6 +537,80 @@ describe("useStartListening", () => {
       },
     });
     startMeetingChatCaptureMock.mockReturnValue(stopMeetingChatCaptureMock);
+  });
+
+  test("uses the persisted meeting target for live transcript persistence", async () => {
+    const transcription = {
+      provider: "assemblyai",
+      model: "universal-3-pro",
+      languages: ["es"],
+    };
+    useSessionMock.mockReturnValue({
+      id: "session-1",
+      user_id: "user-1",
+      raw_md: "Existing memo",
+      transcription,
+    });
+    useSTTConnectionMock.mockReturnValue({
+      conn: {
+        provider: "assemblyai",
+        model: "universal-3-pro",
+        baseUrl: "https://api.assemblyai.com",
+        apiKey: "assembly-key",
+      },
+      localBatchDiarizationAvailable: false,
+    });
+
+    const { result } = renderHook(() => useStartListening("session-1"));
+
+    expect(useSTTConnectionMock).toHaveBeenCalledWith(transcription);
+    await act(async () => {
+      await result.current();
+    });
+    const callbacks = startMock.mock.calls[0]?.[1];
+    callbacks?.handlePersist?.({
+      new_words: [
+        {
+          id: "word-1",
+          text: "hola",
+          start_ms: 0,
+          end_ms: 100,
+          channel: 0,
+        },
+      ],
+      replaced_ids: [],
+      partials: [],
+    });
+
+    await waitFor(() => {
+      expect(createLiveTranscriptMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "assemblyai",
+          model: "universal-3-pro",
+          languages: ["es"],
+        }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  test("persists English as the meeting default before first capture", async () => {
+    useConfigValueMock.mockImplementation((key) =>
+      key === "ai_language" ? undefined : [],
+    );
+    const { result } = renderHook(() => useStartListening("session-1"));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(updateSessionMock).toHaveBeenCalledWith("session-1", {
+      transcription: {
+        provider: "anarlog",
+        model: "am-test",
+        languages: ["en"],
+      },
+    });
   });
 
   afterEach(() => {
@@ -966,7 +1044,7 @@ describe("useStartListening", () => {
     { provider: "soniqo", model: "soniqo-parakeet-streaming" },
     { provider: "apple_speech", model: "apple-speech" },
   ])(
-    "refines complete multi-speaker $model transcripts with the installed local batch model",
+    "does not replace $model with a local batch model for speaker refinement",
     async ({ provider, model }) => {
       useSTTConnectionMock.mockReturnValue({
         conn: {
@@ -1012,20 +1090,7 @@ describe("useStartListening", () => {
         });
       });
 
-      expect(runBatchMock).toHaveBeenCalledWith("/tmp/session.wav", {
-        deferAudioFinalization: true,
-        notifyOnCompletion: false,
-        provider: "soniqo",
-        model: "soniqo-parakeet-batch",
-        baseUrl: "soniqo://local",
-        apiKey: "",
-        promotion: {
-          scope: "current_capture",
-          audioOffsetMs: 0,
-          replaceTranscriptId: "generated-id",
-          startedAt: expect.any(Number),
-        },
-      });
+      expect(runBatchMock).not.toHaveBeenCalled();
       expect(queueAutoEnhanceIfSummaryEmptyMock).toHaveBeenCalledWith(
         "session-1",
       );
@@ -1550,6 +1615,8 @@ describe("useStartListening", () => {
     expect(runBatchMock).toHaveBeenCalledWith("/tmp/session.wav", {
       deferAudioFinalization: true,
       notifyOnCompletion: false,
+      provider: "anarlog",
+      model: "am-test",
       promotion: {
         scope: "current_capture",
         audioOffsetMs: 10_000,

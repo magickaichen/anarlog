@@ -80,6 +80,44 @@ msgstr ""
 msgid "{primaryModifier} ↩ to send"
 msgstr ""
 
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} authentication preflight failed. Check the saved API key."
+msgstr ""
+
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight could not reach the saved endpoint."
+msgstr ""
+
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight failed because the saved endpoint is invalid."
+msgstr ""
+
+#. placeholder {0}: response.status
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight failed with HTTP {0}."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not an available batch transcription model for {selectedProviderId}."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription on {currentPlatform}/{currentArch}. The recorded target requires Apple silicon macOS."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription with {selectedProviderId}. The recorded target does not support batch transcription."
+msgstr ""
+
+#. placeholder {0}: languages.join(", ")
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription with the selected languages ({0})."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedProviderId} {selectedModel} is not connected. {reason}"
+msgstr ""
+
 #: src/sidebar/toast/undo-delete-toast.tsx
 msgid "{title} deleted"
 msgstr ""
@@ -533,6 +571,10 @@ msgstr ""
 
 #: src/main/windows-title-bar.tsx
 msgid "Application menu"
+msgstr ""
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Apply multilingual"
 msgstr ""
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
@@ -2672,6 +2714,14 @@ msgstr ""
 msgid "Meeting history imported"
 msgstr ""
 
+#: src/session/components/floating/options-menu.tsx
+msgid "Meeting language"
+msgstr ""
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Meeting languages"
+msgstr ""
+
 #: src/session-sharing/delivery-management.ts
 #: src/session-sharing/index.tsx
 msgid "Meeting note sent."
@@ -2797,6 +2847,10 @@ msgstr ""
 
 #: src/templates/sections-editor.tsx
 msgid "Move up"
+msgstr ""
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Multilingual…"
 msgstr ""
 
 #: src/sidebar/automations.tsx
@@ -3423,6 +3477,10 @@ msgstr ""
 
 #: src/session/components/note-input/transcript/actions.ts
 msgid "Re-transcription failed"
+msgstr ""
+
+#: src/session/components/note-input/transcript/actions.ts
+msgid "Re-transcription started"
 msgstr ""
 
 #: src/onboarding/permissions.tsx
@@ -4688,8 +4746,28 @@ msgstr ""
 msgid "The notes on this device are linked to another Anarlog account. Sign in with the account previously used here."
 msgstr ""
 
+#: src/session/components/note-input/transcript/actions.ts
+msgid "The original transcription target was not recorded for this meeting."
+msgstr ""
+
 #: src/shared/control.tsx
 msgid "The page you're looking for doesn't exist."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "The recorded transcription target is missing. Choose a speech-to-text provider and model for this meeting."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "The saved authentication credentials are unavailable."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "The selected local transcription service is unavailable."
+msgstr ""
+
+#: src/stt/useRunBatch.ts
+msgid "The selected transcription endpoint is unavailable."
 msgstr ""
 
 #: src/sidebar/toast/registry.tsx

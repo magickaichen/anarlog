@@ -129,6 +129,32 @@ describe("session SQLite operations", () => {
     expect(statements[0].params).toContain(1);
   });
 
+  it("persists one explicit transcription policy on the session row", async () => {
+    await updateSession("session-1", {
+      transcription: {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        languages: ["en", "es"],
+      },
+    });
+
+    const statements = mocks.executeTransaction.mock.calls[0][0] as Array<{
+      sql: string;
+      params: unknown[];
+    }>;
+    expect(statements).toHaveLength(1);
+    expect(statements[0].sql).toContain("transcription_provider = ?");
+    expect(statements[0].sql).toContain("transcription_model = ?");
+    expect(statements[0].sql).toContain("transcription_languages_json = ?");
+    expect(statements[0].params).toEqual(
+      expect.arrayContaining([
+        "assemblyai",
+        "universal-3-5-pro",
+        '["en","es"]',
+      ]),
+    );
+  });
+
   it("stores a memo template without clearing it on later edits", async () => {
     await updateSession("session-1", {
       raw_md: '{"type":"doc"}',

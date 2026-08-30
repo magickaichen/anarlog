@@ -399,6 +399,20 @@ pub const APP_MIGRATION_STEPS: &[anlg_db_migrate::MigrationStep] = &[
         scope: anlg_db_migrate::MigrationScope::Plain,
         sql: include_str!("../migrations/20260826120000_session_proposals.sql"),
     },
+    anlg_db_migrate::MigrationStep {
+        id: "20260829100000_session_transcription_policy",
+        scope: anlg_db_migrate::MigrationScope::CloudsyncAlter {
+            table_name: "sessions",
+        },
+        sql: include_str!("../migrations/20260829100000_session_transcription_policy.sql"),
+    },
+    anlg_db_migrate::MigrationStep {
+        id: "20260829100100_transcript_transcription_target",
+        scope: anlg_db_migrate::MigrationScope::CloudsyncAlter {
+            table_name: "transcripts",
+        },
+        sql: include_str!("../migrations/20260829100100_transcript_transcription_target.sql"),
+    },
 ];
 
 pub fn schema() -> anlg_db_migrate::DbSchema {

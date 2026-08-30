@@ -6,14 +6,27 @@ import { sonnerToast } from "@anlg/ui/components/ui/toast";
 
 import { withCloudsyncActivity } from "~/db/cloudsync-activity";
 import { getEnhancerService } from "~/services/enhancer";
+import { useSession } from "~/session/queries";
 import { useListener } from "~/stt/contexts";
+import { useLatestSessionTranscriptTarget } from "~/stt/queries";
+import { formatTranscriptionTarget } from "~/stt/transcription-policy";
 import { isStoppedTranscriptionError, useRunBatch } from "~/stt/useRunBatch";
 
 export function useRegenerateTranscript(sessionId: string) {
-  const runBatch = useRunBatch(sessionId);
+  const session = useSession(sessionId);
+  const latestTranscriptTarget = useLatestSessionTranscriptTarget(sessionId);
+  const target = latestTranscriptTarget ?? session?.transcription;
+  const runBatch = useRunBatch(sessionId, target);
   const handleBatchFailed = useListener((state) => state.handleBatchFailed);
 
   return useCallback(async () => {
+    if (!target) {
+      sonnerToast.error(t`Re-transcription failed`, {
+        id: `transcript-regenerate-failed-${sessionId}`,
+        description: t`The original transcription target was not recorded for this meeting.`,
+      });
+      return;
+    }
     const result = await fsSyncCommands.audioPath(sessionId);
     if (result.status === "error") {
       sonnerToast.error(t`Recording not found. It may have been deleted.`, {
@@ -25,6 +38,9 @@ export function useRegenerateTranscript(sessionId: string) {
     const audioPath = result.data;
 
     try {
+      sonnerToast.info(t`Re-transcription started`, {
+        description: formatTranscriptionTarget(target),
+      });
       await withCloudsyncActivity(
         "transcription",
         `${sessionId}:retranscription:${crypto.randomUUID()}`,
@@ -46,5 +62,5 @@ export function useRegenerateTranscript(sessionId: string) {
         description: msg,
       });
     }
-  }, [handleBatchFailed, runBatch, sessionId]);
+  }, [handleBatchFailed, runBatch, sessionId, target]);
 }

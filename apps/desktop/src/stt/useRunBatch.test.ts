@@ -7,7 +7,6 @@ import { BatchResponseProcessingError } from "./batch-response-processing-error"
 import {
   canRunBatchTranscription,
   EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE,
-  getBatchFallbackTarget,
   getBatchProvider,
   getSessionSpeakerCount,
   isTerminalTranscriptionError,
@@ -34,6 +33,7 @@ const {
   idMock,
   archMock,
   platformMock,
+  preflightFetchMock,
 } = vi.hoisted(() => ({
   startTranscriptionMock: vi.fn(),
   useListenerMock: vi.fn(),
@@ -53,11 +53,16 @@ const {
   idMock: vi.fn(),
   archMock: vi.fn(),
   platformMock: vi.fn(),
+  preflightFetchMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-os", () => ({
   arch: archMock,
   platform: platformMock,
+}));
+
+vi.mock("@tauri-apps/plugin-http", () => ({
+  fetch: preflightFetchMock,
 }));
 
 vi.mock("./contexts", () => ({
@@ -276,71 +281,6 @@ describe("isTerminalTranscriptionError", () => {
     "STT connection is not available",
   ])("leaves transient failures retryable: %s", (message) => {
     expect(isTerminalTranscriptionError(new Error(message))).toBe(false);
-  });
-});
-
-describe("getBatchFallbackTarget", () => {
-  test("uses hosted cloud transcription for paid users with a session", () => {
-    expect(
-      getBatchFallbackTarget({
-        isPaid: true,
-        accessToken: "token",
-        apiBaseUrl: "https://api.test",
-        currentPlatform: "windows",
-        currentArch: "x86_64",
-      }),
-    ).toEqual({
-      provider: "anarlog",
-      model: "cloud",
-      baseUrl: "https://api.test/stt",
-      apiKey: "token",
-      label: "Pro cloud transcription",
-    });
-  });
-
-  test("uses local Soniqo batch transcription otherwise", () => {
-    expect(
-      getBatchFallbackTarget({
-        isPaid: false,
-        accessToken: null,
-        apiBaseUrl: "https://api.test",
-        currentPlatform: "macos",
-        currentArch: "aarch64",
-      }),
-    ).toEqual({
-      provider: "soniqo",
-      model: "soniqo-parakeet-batch",
-      baseUrl: "soniqo://local",
-      apiKey: "",
-      label: "Soniqo batch transcription",
-    });
-  });
-
-  test.each(["windows", "linux"] as const)(
-    "does not use local Soniqo on %s",
-    (currentPlatform) => {
-      expect(
-        getBatchFallbackTarget({
-          isPaid: false,
-          accessToken: null,
-          apiBaseUrl: "https://api.test",
-          currentPlatform,
-          currentArch: "x86_64",
-        }),
-      ).toBeNull();
-    },
-  );
-
-  test("does not use local Soniqo on Intel macOS", () => {
-    expect(
-      getBatchFallbackTarget({
-        isPaid: false,
-        accessToken: null,
-        apiBaseUrl: "https://api.test",
-        currentPlatform: "macos",
-        currentArch: "x86_64",
-      }),
-    ).toBeNull();
   });
 });
 
@@ -592,6 +532,7 @@ describe("useRunBatch", () => {
     deleteProcessedAudioForRetentionMock.mockResolvedValue(undefined);
     markSessionAudioTranscriptionCompleteMock.mockResolvedValue(undefined);
     isSupportedLanguagesBatchMock.mockResolvedValue(true);
+    preflightFetchMock.mockResolvedValue({ ok: true, status: 200 });
     useListenerMock.mockImplementation((selector) =>
       selector({ startTranscription: startTranscriptionMock }),
     );
@@ -994,6 +935,160 @@ describe("useRunBatch", () => {
     );
   });
 
+  test("reuses the persisted session target after global settings change", async () => {
+    useSessionMock.mockReturnValue({
+      id: "session-1",
+      user_id: "user-1",
+      raw_md: "Existing memo",
+      transcription: {
+        provider: "assemblyai",
+        model: "universal-3-pro",
+        languages: ["es"],
+      },
+    });
+    useSTTConnectionMock.mockReturnValue({
+      conn: {
+        provider: "assemblyai",
+        model: "universal-3-pro",
+        baseUrl: "https://api.assemblyai.com",
+        apiKey: "assembly-key",
+      },
+    });
+    useConfigValueMock.mockImplementation((key) =>
+      key === "ai_language" ? "de" : ["fr"],
+    );
+    startTranscriptionMock.mockImplementation(async (_params, options) => {
+      options.handlePersist(
+        [{ text: "hola", start_ms: 0, end_ms: 100, channel: 0 }],
+        [],
+        { providerModel: "universal-3-pro" },
+      );
+    });
+
+    const { result } = renderHook(() => useRunBatch("session-1"));
+
+    await act(async () => {
+      await result.current("/tmp/session.wav", {
+        promotion: { scope: "whole_session" },
+      });
+    });
+
+    expect(useSTTConnectionMock).toHaveBeenCalledWith({
+      provider: "assemblyai",
+      model: "universal-3-pro",
+      languages: ["es"],
+    });
+    expect(startTranscriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "assemblyai",
+        model: "universal-3-pro",
+        languages: ["es"],
+      }),
+      expect.any(Object),
+    );
+    expect(createTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "assemblyai",
+        model: "universal-3-pro",
+        languages: ["es"],
+        providerModel: "universal-3-pro",
+      }),
+    );
+    expect(preflightFetchMock).toHaveBeenCalledWith(
+      "https://api.assemblyai.com/v2/transcript?limit=1",
+      expect.objectContaining({
+        method: "GET",
+        headers: { Authorization: "assembly-key" },
+      }),
+    );
+  });
+
+  test("rejects a retired AssemblyAI model before contacting the provider", async () => {
+    useSessionMock.mockReturnValue({
+      id: "session-1",
+      user_id: "user-1",
+      transcription: {
+        provider: "assemblyai",
+        model: "retired-model",
+        languages: ["en"],
+      },
+    });
+    useSTTConnectionMock.mockReturnValue({
+      conn: {
+        provider: "assemblyai",
+        model: "retired-model",
+        baseUrl: "https://api.assemblyai.com",
+        apiKey: "assembly-key",
+      },
+    });
+
+    const { result } = renderHook(() => useRunBatch("session-1"));
+
+    await expect(
+      act(async () => result.current("/tmp/session.wav")),
+    ).rejects.toThrow(
+      "retired-model is not an available batch transcription model for assemblyai",
+    );
+    expect(preflightFetchMock).not.toHaveBeenCalled();
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
+  });
+
+  test("reports AssemblyAI authentication failure before starting the job", async () => {
+    useSessionMock.mockReturnValue({
+      id: "session-1",
+      user_id: "user-1",
+      transcription: {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        languages: ["en"],
+      },
+    });
+    useSTTConnectionMock.mockReturnValue({
+      conn: {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        baseUrl: "https://api.assemblyai.com",
+        apiKey: "expired-key",
+      },
+    });
+    preflightFetchMock.mockResolvedValue({ ok: false, status: 401 });
+
+    const { result } = renderHook(() => useRunBatch("session-1"));
+
+    await expect(
+      act(async () => result.current("/tmp/session.wav")),
+    ).rejects.toThrow("authentication preflight failed");
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
+  });
+
+  test("reports AssemblyAI connectivity failure before starting the job", async () => {
+    useSessionMock.mockReturnValue({
+      id: "session-1",
+      user_id: "user-1",
+      transcription: {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        languages: ["en"],
+      },
+    });
+    useSTTConnectionMock.mockReturnValue({
+      conn: {
+        provider: "assemblyai",
+        model: "universal-3-5-pro",
+        baseUrl: "https://api.assemblyai.com",
+        apiKey: "assembly-key",
+      },
+    });
+    preflightFetchMock.mockRejectedValue(new Error("offline"));
+
+    const { result } = renderHook(() => useRunBatch("session-1"));
+
+    await expect(
+      act(async () => result.current("/tmp/session.wav")),
+    ).rejects.toThrow("connectivity preflight could not reach");
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
+  });
+
   test("uses an explicit local batch target for speaker refinement", async () => {
     startTranscriptionMock.mockResolvedValue(undefined);
 
@@ -1021,7 +1116,7 @@ describe("useRunBatch", () => {
     expect(sonnerToastWarningMock).not.toHaveBeenCalled();
   });
 
-  test("falls back to local Soniqo when the selected provider is not batch-capable", async () => {
+  test("does not replace an unavailable recorded target with local Soniqo", async () => {
     useSTTConnectionMock.mockReturnValue({
       conn: {
         provider: "custom",
@@ -1030,30 +1125,16 @@ describe("useRunBatch", () => {
         apiKey: "custom-key",
       },
     });
-    startTranscriptionMock.mockResolvedValue(undefined);
-
     const { result } = renderHook(() => useRunBatch("session-1"));
 
-    await act(async () => {
-      await result.current("/tmp/session.wav");
-    });
+    await expect(
+      act(async () => {
+        await result.current("/tmp/session.wav");
+      }),
+    ).rejects.toThrow("realtime-only is not available for batch transcription");
 
-    expect(startTranscriptionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "soniqo",
-        model: "soniqo-parakeet-batch",
-        base_url: "soniqo://local",
-        api_key: "",
-      }),
-      expect.any(Object),
-    );
-    expect(sonnerToastWarningMock).toHaveBeenCalledWith(
-      "Using a batch transcription provider",
-      expect.objectContaining({
-        description:
-          "realtime-only is not available for batch transcription. Using Soniqo batch transcription instead.",
-      }),
-    );
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
+    expect(sonnerToastWarningMock).not.toHaveBeenCalled();
   });
 
   test.each(["windows", "linux"] as const)(
@@ -1086,7 +1167,7 @@ describe("useRunBatch", () => {
   );
 
   test.each(["windows", "linux"] as const)(
-    "does not invoke Soniqo as a batch fallback on %s",
+    "reports an unsupported recorded model without invoking Soniqo on %s",
     async (currentPlatform) => {
       platformMock.mockReturnValue(currentPlatform);
       useSTTConnectionMock.mockReturnValue({
@@ -1105,7 +1186,7 @@ describe("useRunBatch", () => {
           await result.current("/tmp/session.wav");
         }),
       ).rejects.toThrow(
-        "realtime-only is not available for batch transcription on this platform",
+        "realtime-only is not available for batch transcription with custom",
       );
 
       expect(startTranscriptionMock).not.toHaveBeenCalled();
@@ -1131,13 +1212,13 @@ describe("useRunBatch", () => {
         await result.current("/tmp/session.wav");
       }),
     ).rejects.toThrow(
-      "soniqo-parakeet-batch is not available for batch transcription on this platform",
+      "soniqo-parakeet-batch is not available for batch transcription on macos/x86_64",
     );
 
     expect(startTranscriptionMock).not.toHaveBeenCalled();
   });
 
-  test("falls back from local Soniqo to cloud for paid Intel Mac users", async () => {
+  test("does not replace an unavailable local target with cloud for paid users", async () => {
     archMock.mockReturnValue("x86_64");
     useBillingAccessMock.mockReturnValue({ isPaid: true });
     useSTTConnectionMock.mockReturnValue({
@@ -1148,54 +1229,36 @@ describe("useRunBatch", () => {
         apiKey: "",
       },
     });
-    startTranscriptionMock.mockResolvedValue(undefined);
-
     const { result } = renderHook(() => useRunBatch("session-1"));
 
-    await act(async () => {
-      await result.current("/tmp/session.wav");
-    });
-
-    expect(startTranscriptionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anarlog",
-        model: "cloud",
-        base_url: "https://api.test/stt",
-        api_key: "paid-token",
+    await expect(
+      act(async () => {
+        await result.current("/tmp/session.wav");
       }),
-      expect.any(Object),
+    ).rejects.toThrow(
+      "soniqo-parakeet-batch is not available for batch transcription on macos/x86_64",
     );
+
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
   });
 
-  test("falls back to hosted cloud transcription for paid users", async () => {
+  test("does not replace a language-incompatible target with hosted cloud", async () => {
     isSupportedLanguagesBatchMock.mockResolvedValue(false);
     useBillingAccessMock.mockReturnValue({
       isPaid: true,
     });
-    startTranscriptionMock.mockResolvedValue(undefined);
-
     const { result } = renderHook(() => useRunBatch("session-1"));
 
-    await act(async () => {
-      await result.current("/tmp/session.wav");
-    });
+    await expect(
+      act(async () => {
+        await result.current("/tmp/session.wav");
+      }),
+    ).rejects.toThrow(
+      "nova-3 is not available for batch transcription with the selected languages",
+    );
 
-    expect(startTranscriptionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anarlog",
-        model: "cloud",
-        base_url: "https://api.test/stt",
-        api_key: "paid-token",
-      }),
-      expect.any(Object),
-    );
-    expect(sonnerToastWarningMock).toHaveBeenCalledWith(
-      "Using a batch transcription provider",
-      expect.objectContaining({
-        description:
-          "nova-3 is not available for batch transcription. Using Pro cloud transcription instead.",
-      }),
-    );
+    expect(startTranscriptionMock).not.toHaveBeenCalled();
+    expect(sonnerToastWarningMock).not.toHaveBeenCalled();
   });
 
   test("refreshes an expired cloud token and retries transcription once", async () => {

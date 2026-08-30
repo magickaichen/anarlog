@@ -18,7 +18,10 @@ import {
 } from "~/stt/capabilities";
 import { localSttQueries } from "~/stt/useLocalSttModel";
 
-export const useSTTConnection = () => {
+export const useSTTConnection = (selection?: {
+  provider: string;
+  model: string;
+}) => {
   const auth = useAuth();
   const billing = useBillingAccess();
   const { current_stt_provider, current_stt_model, local_stt_model_path } =
@@ -32,33 +35,31 @@ export const useSTTConnection = () => {
       local_stt_model_path: string | undefined;
     };
 
-  const providerConfig = useAiProvider("stt", current_stt_provider) as
-    | AIProviderStorage
-    | undefined;
+  const selectedProvider = selection?.provider ?? current_stt_provider;
+  const selectedModel = selection?.model ?? current_stt_model;
 
-  const localModel = isOnDeviceSttModel(current_stt_provider, current_stt_model)
-    ? current_stt_model
+  const providerConfig = useAiProvider(
+    "stt",
+    selectedProvider as ProviderId,
+  ) as AIProviderStorage | undefined;
+
+  const localModel = isOnDeviceSttModel(selectedProvider, selectedModel)
+    ? selectedModel
     : null;
-  const isLocalFile = isLocalFileSttModel(
-    current_stt_provider,
-    current_stt_model,
-  );
+  const isLocalFile = isLocalFileSttModel(selectedProvider, selectedModel);
   const isLocalModel = !!localModel || isLocalFile;
 
-  const isCloudModel = isAnarlogCloudSttModel(
-    current_stt_provider,
-    current_stt_model,
-  );
+  const isCloudModel = isAnarlogCloudSttModel(selectedProvider, selectedModel);
   const localBatchModel = useQuery({
     ...localSttQueries.isDownloaded("soniqo-parakeet-batch"),
-    enabled: isRealtimeLocalModel(current_stt_model),
+    enabled: isRealtimeLocalModel(selectedModel),
   });
 
   const local = useQuery({
     enabled: isLocalModel,
     queryKey: [
       "stt-connection",
-      current_stt_provider,
+      selectedProvider,
       localModel,
       local_stt_model_path,
     ],
@@ -115,7 +116,7 @@ export const useSTTConnection = () => {
         return {
           status: "ready" as const,
           connection: {
-            provider: current_stt_provider!,
+            provider: selectedProvider!,
             model: localModel,
             baseUrl: server.url,
             apiKey: "",
@@ -134,7 +135,7 @@ export const useSTTConnection = () => {
   const apiKey = providerConfig?.api_key?.trim();
 
   const connection = useMemo(() => {
-    if (!current_stt_provider || !current_stt_model) {
+    if (!selectedProvider || !selectedModel) {
       return null;
     }
 
@@ -148,8 +149,8 @@ export const useSTTConnection = () => {
       }
 
       return {
-        provider: current_stt_provider,
-        model: current_stt_model,
+        provider: selectedProvider,
+        model: selectedModel,
         baseUrl: baseUrl || new URL("/stt", env.VITE_API_URL).toString(),
         apiKey: auth.session.access_token,
       };
@@ -160,14 +161,14 @@ export const useSTTConnection = () => {
     }
 
     return {
-      provider: current_stt_provider,
-      model: current_stt_model,
+      provider: selectedProvider,
+      model: selectedModel,
       baseUrl,
       apiKey,
     };
   }, [
-    current_stt_provider,
-    current_stt_model,
+    selectedProvider,
+    selectedModel,
     localModel,
     isLocalModel,
     isCloudModel,
@@ -178,8 +179,38 @@ export const useSTTConnection = () => {
     billing.isPaid,
   ]);
 
+  const connectionIssue = useMemo(() => {
+    if (!selectedProvider || !selectedModel || connection) {
+      return null;
+    }
+    if (isLocalModel) {
+      return "local_service" as const;
+    }
+    if (isCloudModel && (!auth?.session || !billing.isPaid)) {
+      return "authentication" as const;
+    }
+    if (!baseUrl) {
+      return "connectivity" as const;
+    }
+    if (!apiKey) {
+      return "authentication" as const;
+    }
+    return "connectivity" as const;
+  }, [
+    selectedProvider,
+    selectedModel,
+    connection,
+    isLocalModel,
+    isCloudModel,
+    auth?.session,
+    billing.isPaid,
+    baseUrl,
+    apiKey,
+  ]);
+
   return {
     conn: connection,
+    connectionIssue,
     local,
     localBatchDiarizationAvailable: localBatchModel.data === true,
     isLocalModel,

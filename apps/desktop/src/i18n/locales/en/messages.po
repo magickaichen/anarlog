@@ -80,6 +80,44 @@ msgstr "{months} months ago"
 msgid "{primaryModifier} ↩ to send"
 msgstr "{primaryModifier} ↩ to send"
 
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} authentication preflight failed. Check the saved API key."
+msgstr "{provider} {model} authentication preflight failed. Check the saved API key."
+
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight could not reach the saved endpoint."
+msgstr "{provider} {model} connectivity preflight could not reach the saved endpoint."
+
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight failed because the saved endpoint is invalid."
+msgstr "{provider} {model} connectivity preflight failed because the saved endpoint is invalid."
+
+#. placeholder {0}: response.status
+#: src/stt/batch-target-preflight.ts
+msgid "{provider} {model} connectivity preflight failed with HTTP {0}."
+msgstr "{provider} {model} connectivity preflight failed with HTTP {0}."
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not an available batch transcription model for {selectedProviderId}."
+msgstr "{selectedModel} is not an available batch transcription model for {selectedProviderId}."
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription on {currentPlatform}/{currentArch}. The recorded target requires Apple silicon macOS."
+msgstr "{selectedModel} is not available for batch transcription on {currentPlatform}/{currentArch}. The recorded target requires Apple silicon macOS."
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription with {selectedProviderId}. The recorded target does not support batch transcription."
+msgstr "{selectedModel} is not available for batch transcription with {selectedProviderId}. The recorded target does not support batch transcription."
+
+#. placeholder {0}: languages.join(", ")
+#: src/stt/useRunBatch.ts
+msgid "{selectedModel} is not available for batch transcription with the selected languages ({0})."
+msgstr "{selectedModel} is not available for batch transcription with the selected languages ({0})."
+
+#: src/stt/useRunBatch.ts
+msgid "{selectedProviderId} {selectedModel} is not connected. {reason}"
+msgstr "{selectedProviderId} {selectedModel} is not connected. {reason}"
+
 #: src/sidebar/toast/undo-delete-toast.tsx
 msgid "{title} deleted"
 msgstr "{title} deleted"
@@ -534,6 +572,10 @@ msgstr "Apple Calendar access is off"
 #: src/main/windows-title-bar.tsx
 msgid "Application menu"
 msgstr "Application menu"
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Apply multilingual"
+msgstr "Apply multilingual"
 
 #: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
 msgid "Apply to all"
@@ -2672,6 +2714,14 @@ msgstr "Meeting exports"
 msgid "Meeting history imported"
 msgstr "Meeting history imported"
 
+#: src/session/components/floating/options-menu.tsx
+msgid "Meeting language"
+msgstr "Meeting language"
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Meeting languages"
+msgstr "Meeting languages"
+
 #: src/session-sharing/delivery-management.ts
 #: src/session-sharing/index.tsx
 msgid "Meeting note sent."
@@ -2798,6 +2848,10 @@ msgstr "Move down"
 #: src/templates/sections-editor.tsx
 msgid "Move up"
 msgstr "Move up"
+
+#: src/session/components/floating/options-menu.tsx
+msgid "Multilingual…"
+msgstr "Multilingual…"
 
 #: src/sidebar/automations.tsx
 msgid "My automations"
@@ -3424,6 +3478,10 @@ msgstr "Re-transcribe this audio, or upload a transcript file."
 #: src/session/components/note-input/transcript/actions.ts
 msgid "Re-transcription failed"
 msgstr "Re-transcription failed"
+
+#: src/session/components/note-input/transcript/actions.ts
+msgid "Re-transcription started"
+msgstr "Re-transcription started"
 
 #: src/onboarding/permissions.tsx
 msgid "Read meeting controls and visible chat"
@@ -4688,9 +4746,29 @@ msgstr "The note may have been unshared or moved out of a workspace you can acce
 msgid "The notes on this device are linked to another Anarlog account. Sign in with the account previously used here."
 msgstr "The notes on this device are linked to another Anarlog account. Sign in with the account previously used here."
 
+#: src/session/components/note-input/transcript/actions.ts
+msgid "The original transcription target was not recorded for this meeting."
+msgstr "The original transcription target was not recorded for this meeting."
+
 #: src/shared/control.tsx
 msgid "The page you're looking for doesn't exist."
 msgstr "The page you're looking for doesn't exist."
+
+#: src/stt/useRunBatch.ts
+msgid "The recorded transcription target is missing. Choose a speech-to-text provider and model for this meeting."
+msgstr "The recorded transcription target is missing. Choose a speech-to-text provider and model for this meeting."
+
+#: src/stt/useRunBatch.ts
+msgid "The saved authentication credentials are unavailable."
+msgstr "The saved authentication credentials are unavailable."
+
+#: src/stt/useRunBatch.ts
+msgid "The selected local transcription service is unavailable."
+msgstr "The selected local transcription service is unavailable."
+
+#: src/stt/useRunBatch.ts
+msgid "The selected transcription endpoint is unavailable."
+msgstr "The selected transcription endpoint is unavailable."
 
 #: src/sidebar/toast/registry.tsx
 msgid "The update download failed"

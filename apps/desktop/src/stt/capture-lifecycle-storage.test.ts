@@ -36,6 +36,7 @@ const marker: CaptureLifecycleMarker = {
   memo: "memo",
   provider: "anarlog",
   model: "am",
+  languages: ["en", "es"],
 };
 
 beforeEach(() => {
