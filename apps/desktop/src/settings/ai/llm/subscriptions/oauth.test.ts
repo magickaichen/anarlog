@@ -219,6 +219,16 @@ describe("subscription OAuth helpers", () => {
       '{"model":"gpt-5.4","store":false}',
     );
   });
+
+  test("removes max_output_tokens unsupported by Codex Responses", () => {
+    expect(
+      chatgptResponsesBody(
+        '{"model":"gpt-5.6-terra","input":"Summarize this meeting","max_output_tokens":8192,"store":false}',
+      ),
+    ).toBe(
+      '{"model":"gpt-5.6-terra","input":"Summarize this meeting","store":false}',
+    );
+  });
 });
 
 function chatgptJwt(payload: Record<string, unknown>): string {
