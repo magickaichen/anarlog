@@ -665,7 +665,9 @@ export function chatgptResponsesBody(body: BodyInit | null | undefined) {
 
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>;
-    if (parsed.store === false) {
+    const hadMaxOutputTokens = "max_output_tokens" in parsed;
+    delete parsed.max_output_tokens;
+    if (parsed.store === false && !hadMaxOutputTokens) {
       return body;
     }
     return JSON.stringify({ ...parsed, store: false });
