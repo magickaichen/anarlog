@@ -60,8 +60,8 @@ impl RealtimeSttAdapter for AssemblyAIAdapter {
             let (speech_model, language_detection) = resolved_model.query_config(params);
 
             query_pairs.append_pair("speech_model", speech_model);
-            if let Some(language) = resolved_model.explicit_language(params) {
-                query_pairs.append_pair("language_code", language);
+            if let Some(language_codes) = resolved_model.language_codes(params) {
+                query_pairs.append_pair("language_codes", &language_codes);
             }
             if language_detection {
                 query_pairs.append_pair("language_detection", "true");
@@ -464,14 +464,25 @@ impl ResolvedLiveModel {
         }
     }
 
-    fn explicit_language<'a>(self, params: &'a ListenParams) -> Option<&'a str> {
-        if !matches!(self, Self::Universal35Pro) || params.languages.len() != 1 {
+    fn language_codes(self, params: &ListenParams) -> Option<String> {
+        if !matches!(self, Self::Universal35Pro)
+            || params.languages.is_empty()
+            || !params
+                .languages
+                .iter()
+                .all(|language| U35_STREAMING_LANGUAGES.contains(&language.iso639().code()))
+        {
             return None;
         }
-        params
-            .languages
-            .first()
-            .map(|language| language.iso639().code())
+
+        serde_json::to_string(
+            &params
+                .languages
+                .iter()
+                .map(|language| language.iso639().code())
+                .collect::<Vec<_>>(),
+        )
+        .ok()
     }
 }
 
@@ -500,8 +511,11 @@ mod tests {
                     name: "english_only",
                     model: None,
                     languages: &[ISO639::En],
-                    contains: &["speech_model=universal-3-5-pro", "language_code=en"],
-                    not_contains: &["format_turns", "language_detection"],
+                    contains: &[
+                        "speech_model=universal-3-5-pro",
+                        "language_codes=%5B%22en%22%5D",
+                    ],
+                    not_contains: &["format_turns", "language_code=en", "language_detection"],
                 },
                 UrlTestCase {
                     name: "empty_defaults_to_english",
@@ -524,9 +538,13 @@ mod tests {
                     name: "explicit_supported_language_keeps_u35",
                     model: Some("universal-3-5-pro-realtime"),
                     languages: &[ISO639::Es],
-                    contains: &["speech_model=universal-3-5-pro"],
+                    contains: &[
+                        "speech_model=universal-3-5-pro",
+                        "language_codes=%5B%22es%22%5D",
+                    ],
                     not_contains: &[
                         "format_turns",
+                        "language_code=es",
                         "language_detection",
                         "speech_model=whisper-rt",
                     ],
@@ -542,16 +560,28 @@ mod tests {
                     name: "supported_multi_language_keeps_u35",
                     model: None,
                     languages: &[ISO639::En, ISO639::Es],
-                    contains: &["speech_model=universal-3-5-pro", "language_detection=true"],
-                    not_contains: &["format_turns", "language_code", "speech_model=whisper-rt"],
+                    contains: &[
+                        "speech_model=universal-3-5-pro",
+                        "language_codes=%5B%22en%22%2C%22es%22%5D",
+                        "language_detection=true",
+                    ],
+                    not_contains: &[
+                        "format_turns",
+                        "language_code=en",
+                        "speech_model=whisper-rt",
+                    ],
                 },
                 UrlTestCase {
                     name: "u35_language_outside_legacy_u3_keeps_u35",
                     model: Some("universal-3-5-pro-realtime"),
                     languages: &[ISO639::Ja],
-                    contains: &["speech_model=universal-3-5-pro"],
+                    contains: &[
+                        "speech_model=universal-3-5-pro",
+                        "language_codes=%5B%22ja%22%5D",
+                    ],
                     not_contains: &[
                         "format_turns",
+                        "language_code=ja",
                         "language_detection",
                         "speech_model=whisper-rt",
                     ],
@@ -560,8 +590,13 @@ mod tests {
                     name: "unsupported_single_language_does_not_replace_the_model",
                     model: None,
                     languages: &[ISO639::Ko],
-                    contains: &["speech_model=universal-3-5-pro", "language_code=ko"],
-                    not_contains: &["speech_model=whisper-rt", "format_turns=true"],
+                    contains: &["speech_model=universal-3-5-pro"],
+                    not_contains: &[
+                        "speech_model=whisper-rt",
+                        "format_turns=true",
+                        "language_code=ko",
+                        "language_codes=",
+                    ],
                 },
                 UrlTestCase {
                     name: "mixed_supported_and_unsupported_languages_do_not_replace_the_model",
@@ -571,7 +606,8 @@ mod tests {
                     not_contains: &[
                         "speech_model=whisper-rt",
                         "format_turns=true",
-                        "language_code",
+                        "language_code=",
+                        "language_codes=",
                     ],
                 },
             ],
