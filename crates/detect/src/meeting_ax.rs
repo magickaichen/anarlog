@@ -191,6 +191,11 @@ fn select_child_walk(
     }
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn snapshot_allows_visible_subset(_depth: usize) -> bool {
+    true
+}
+
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn browser_meeting_root_from_snapshot(
     nodes: Vec<AxNode>,
@@ -2073,7 +2078,9 @@ fn collect_nodes_with_scope(
     node.within_slack_huddle_scope = within_slack_huddle_scope;
     nodes.push(node);
 
-    let Some(children) = walkable_children(element, tree_path.is_empty()) else {
+    let Some(children) =
+        walkable_children(element, snapshot_allows_visible_subset(tree_path.len()))
+    else {
         return;
     };
 
