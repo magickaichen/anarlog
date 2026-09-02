@@ -46,6 +46,37 @@ fn zoom_fixture_extracts_normalized_participant_names() {
 }
 
 #[test]
+fn validated_zoom_root_exposes_observed_participants() {
+    let mut window = fixture_node(0, "AXWindow", "Meeting", &[0]);
+    window.within_zoom_meeting_scope = true;
+    let mut leave = fixture_node(1, "AXButton", "Leave meeting", &[0, 0]);
+    leave.within_zoom_meeting_scope = true;
+    let mut participant = fixture_node(
+        2,
+        "AXGroup",
+        "Video render Ada Lovelace, Computer audio unmuted",
+        &[0, 1],
+    );
+    participant.within_zoom_meeting_scope = true;
+
+    let root = native_meeting_root_from_snapshot(
+        &MeetingPlatform::Zoom,
+        Some("Meeting".to_string()),
+        vec![window, leave, participant],
+        true,
+        false,
+    )
+    .expect("Zoom meeting evidence should validate the captured root");
+
+    assert_eq!(
+        extract_observed_participants(&MeetingPlatform::Zoom, &root.nodes),
+        vec![MeetingObservedParticipant {
+            display_name: "Ada Lovelace".to_string(),
+        }]
+    );
+}
+
+#[test]
 fn google_meet_fixture_extracts_names_only_from_people_surface() {
     let people = fixture_node(0, "AXGroup", "People", &[4]);
     let mut ada = fixture_node(1, "AXStaticText", "  Ada   Lovelace  ", &[4, 0, 0]);

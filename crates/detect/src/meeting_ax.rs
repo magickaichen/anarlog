@@ -104,6 +104,8 @@ pub use types::{
 const MAX_TREE_DEPTH: usize = 32;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 const MAX_NODES: usize = 4000;
+#[cfg(any(test, target_os = "macos"))]
+const MAX_PARTICIPANT_TREE_DEPTH: usize = 64;
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 const MAX_MEETING_CHAT_MESSAGE_CHARS: usize = 2_000;
@@ -170,6 +172,34 @@ enum ChildWalk {
 }
 
 #[cfg(any(test, target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotPurpose {
+    General,
+    ObservedParticipants,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+impl SnapshotPurpose {
+    fn max_depth(self) -> usize {
+        match self {
+            Self::General => MAX_TREE_DEPTH,
+            Self::ObservedParticipants => MAX_PARTICIPANT_TREE_DEPTH,
+        }
+    }
+
+    fn allows_visible_subset(self, depth: usize) -> bool {
+        depth == 0 || self == Self::ObservedParticipants
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct SnapshotTruncation {
+    depth_exceeded: bool,
+    node_limit_reached: bool,
+}
+
+#[cfg(any(test, target_os = "macos"))]
 fn select_child_walk(
     children: Option<usize>,
     visible: Option<usize>,
@@ -189,11 +219,6 @@ fn select_child_walk(
         (Some(_), None) => Some(ChildWalk::Visible),
         (None, None) => None,
     }
-}
-
-#[cfg(any(test, target_os = "macos"))]
-fn snapshot_allows_visible_subset(_depth: usize) -> bool {
-    true
 }
 
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -897,7 +922,7 @@ pub fn capture_meeting_participants(bundle_ids: Vec<String>) -> MeetingParticipa
             let ax_app = ax::UiElement::with_app_pid(pid);
             let _ = ax_app.set_messaging_timeout_secs(0.6);
             let (roots, has_unscoped_meeting_window) =
-                collect_browser_meeting_roots(&ax_app, &mut warnings);
+                collect_browser_participant_roots(&ax_app, &mut warnings);
             browser_scope_poisoned |= has_unscoped_meeting_window;
             browser_roots.extend(roots.into_iter().map(|root| (app.clone(), root)));
         }
@@ -921,7 +946,7 @@ pub fn capture_meeting_participants(bundle_ids: Vec<String>) -> MeetingParticipa
         for (app, pid) in running_apps_for_bundle(bundle_id) {
             let ax_app = ax::UiElement::with_app_pid(pid);
             let _ = ax_app.set_messaging_timeout_secs(0.6);
-            for root in collect_native_meeting_roots(&ax_app, &bundle_platform, &mut warnings) {
+            for root in collect_native_participant_roots(&ax_app, &bundle_platform, &mut warnings) {
                 candidates.push((
                     app.clone(),
                     bundle_platform.clone(),
@@ -1467,10 +1492,45 @@ fn collect_native_meeting_roots(
 }
 
 #[cfg(target_os = "macos")]
+fn collect_native_participant_roots(
+    ax_app: &ax::UiElement,
+    platform: &MeetingPlatform,
+    warnings: &mut Vec<String>,
+) -> Vec<NativeMeetingRoot> {
+    collect_native_meeting_windows_for_purpose(
+        ax_app,
+        platform,
+        false,
+        SnapshotPurpose::ObservedParticipants,
+        warnings,
+    )
+    .into_iter()
+    .map(|(root, _)| root)
+    .collect()
+}
+
+#[cfg(target_os = "macos")]
 fn collect_native_meeting_windows(
     ax_app: &ax::UiElement,
     platform: &MeetingPlatform,
     require_complete: bool,
+    warnings: &mut Vec<String>,
+) -> Vec<(NativeMeetingRoot, arc::R<ax::UiElement>)> {
+    collect_native_meeting_windows_for_purpose(
+        ax_app,
+        platform,
+        require_complete,
+        SnapshotPurpose::General,
+        warnings,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn collect_native_meeting_windows_for_purpose(
+    ax_app: &ax::UiElement,
+    platform: &MeetingPlatform,
+    require_complete: bool,
+    purpose: SnapshotPurpose,
     warnings: &mut Vec<String>,
 ) -> Vec<(NativeMeetingRoot, arc::R<ax::UiElement>)> {
     let mut windows = Vec::new();
@@ -1486,7 +1546,7 @@ fn collect_native_meeting_windows(
         .filter_map(|element| {
             let window_title = string_attr(&element, ax::attr::title());
             let mut nodes = Vec::new();
-            let complete = collect_nodes(&element, 0, &mut nodes, warnings);
+            let complete = collect_nodes_for_purpose(&element, 0, &mut nodes, purpose, warnings);
             native_meeting_root_from_snapshot(
                 platform,
                 window_title,
@@ -1560,8 +1620,30 @@ fn collect_browser_meeting_roots(
 }
 
 #[cfg(target_os = "macos")]
+fn collect_browser_participant_roots(
+    ax_app: &ax::UiElement,
+    warnings: &mut Vec<String>,
+) -> (Vec<BrowserMeetingRoot>, bool) {
+    let (roots, poisoned) = collect_browser_meeting_windows_for_purpose(
+        ax_app,
+        SnapshotPurpose::ObservedParticipants,
+        warnings,
+    );
+    (roots.into_iter().map(|(root, _)| root).collect(), poisoned)
+}
+
+#[cfg(target_os = "macos")]
 fn collect_browser_meeting_windows(
     ax_app: &ax::UiElement,
+    warnings: &mut Vec<String>,
+) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool) {
+    collect_browser_meeting_windows_for_purpose(ax_app, SnapshotPurpose::General, warnings)
+}
+
+#[cfg(target_os = "macos")]
+fn collect_browser_meeting_windows_for_purpose(
+    ax_app: &ax::UiElement,
+    purpose: SnapshotPurpose,
     warnings: &mut Vec<String>,
 ) -> (Vec<(BrowserMeetingRoot, arc::R<ax::UiElement>)>, bool) {
     let focused_web_area = focused_web_area_element(ax_app);
@@ -1615,7 +1697,8 @@ fn collect_browser_meeting_windows(
             });
             let mut nodes = Vec::new();
             let mut root_warnings = Vec::new();
-            let complete = collect_nodes(&window, 0, &mut nodes, &mut root_warnings);
+            let complete =
+                collect_nodes_for_purpose(&window, 0, &mut nodes, purpose, &mut root_warnings);
             match browser_meeting_root_from_snapshot(
                 nodes,
                 complete,
@@ -2030,9 +2113,20 @@ fn collect_nodes(
     nodes: &mut Vec<AxNode>,
     warnings: &mut Vec<String>,
 ) -> bool {
+    collect_nodes_for_purpose(element, depth, nodes, SnapshotPurpose::General, warnings)
+}
+
+#[cfg(target_os = "macos")]
+fn collect_nodes_for_purpose(
+    element: &ax::UiElement,
+    depth: usize,
+    nodes: &mut Vec<AxNode>,
+    purpose: SnapshotPurpose,
+    warnings: &mut Vec<String>,
+) -> bool {
     maybe_note_visible_child_walk(element, warnings);
     let mut tree_path = Vec::new();
-    let mut truncated = false;
+    let mut truncation = SnapshotTruncation::default();
     collect_nodes_with_scope(
         element,
         depth,
@@ -2041,14 +2135,21 @@ fn collect_nodes(
         false,
         false,
         nodes,
-        &mut truncated,
+        purpose,
+        &mut truncation,
     );
-    if truncated {
+    if truncation.depth_exceeded {
         warnings.push(format!(
-            "AX tree snapshot was incomplete at depth {MAX_TREE_DEPTH} or {MAX_NODES} nodes"
+            "AX tree snapshot exceeded the depth limit of {}",
+            purpose.max_depth()
         ));
     }
-    !truncated
+    if truncation.node_limit_reached {
+        warnings.push(format!(
+            "AX tree snapshot reached the node limit of {MAX_NODES}"
+        ));
+    }
+    !truncation.depth_exceeded && !truncation.node_limit_reached
 }
 
 #[cfg(target_os = "macos")]
@@ -2060,10 +2161,15 @@ fn collect_nodes_with_scope(
     within_zoom_chat_scope: bool,
     within_slack_huddle_scope: bool,
     nodes: &mut Vec<AxNode>,
-    truncated: &mut bool,
+    purpose: SnapshotPurpose,
+    truncation: &mut SnapshotTruncation,
 ) {
-    if depth > MAX_TREE_DEPTH || nodes.len() >= MAX_NODES {
-        *truncated = true;
+    if depth > purpose.max_depth() {
+        truncation.depth_exceeded = true;
+        return;
+    }
+    if nodes.len() >= MAX_NODES {
+        truncation.node_limit_reached = true;
         return;
     }
 
@@ -2078,15 +2184,13 @@ fn collect_nodes_with_scope(
     node.within_slack_huddle_scope = within_slack_huddle_scope;
     nodes.push(node);
 
-    let Some(children) =
-        walkable_children(element, snapshot_allows_visible_subset(tree_path.len()))
-    else {
+    let Some(children) = walkable_children(element, purpose.allows_visible_subset(depth)) else {
         return;
     };
 
     for (child_index, child) in children.iter().enumerate() {
         if nodes.len() >= MAX_NODES {
-            *truncated = true;
+            truncation.node_limit_reached = true;
             return;
         }
 
@@ -2099,7 +2203,8 @@ fn collect_nodes_with_scope(
             within_zoom_chat_scope,
             within_slack_huddle_scope,
             nodes,
-            truncated,
+            purpose,
+            truncation,
         );
         tree_path.pop();
     }
