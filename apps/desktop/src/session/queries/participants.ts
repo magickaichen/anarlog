@@ -205,6 +205,8 @@ type ObservedParticipantMatchRow = {
   human_id: string;
   source: string;
   name: string;
+  first_observed_at: string | null;
+  last_observed_at: string | null;
 };
 
 export function persistObservedParticipants(
@@ -229,6 +231,8 @@ export function persistObservedParticipants(
           participant.id,
           participant.human_id,
           participant.source,
+          participant.first_observed_at,
+          participant.last_observed_at,
           COALESCE(NULLIF(human.name, ''), participant.display_name) AS name
         FROM session_participants AS participant
         LEFT JOIN humans AS human
@@ -262,19 +266,55 @@ export function persistObservedParticipants(
         : matchingNames.find((participant) => !participant.human_id);
 
       if (match) {
+        const duplicateRows = matchingNames.filter(
+          (participant) =>
+            participant.id !== match.id &&
+            (unambiguousHumanId
+              ? !participant.human_id ||
+                participant.human_id === unambiguousHumanId
+              : !participant.human_id),
+        );
+        const rowsToMerge = [match, ...duplicateRows];
+        const firstObservedAt = rowsToMerge.reduce(
+          (earliest, participant) =>
+            participant.first_observed_at &&
+            participant.first_observed_at < earliest
+              ? participant.first_observed_at
+              : earliest,
+          now,
+        );
+        const lastObservedAt = rowsToMerge.reduce(
+          (latest, participant) =>
+            participant.last_observed_at &&
+            participant.last_observed_at > latest
+              ? participant.last_observed_at
+              : latest,
+          now,
+        );
         statements.push({
           sql: `
             UPDATE session_participants
             SET
               display_name = ?,
               source = 'observed',
-              first_observed_at = COALESCE(first_observed_at, ?),
+              first_observed_at = ?,
               last_observed_at = ?,
               updated_at = ?
             WHERE id = ? AND deleted_at IS NULL
           `,
-          params: [displayName, now, now, now, match.id],
+          params: [displayName, firstObservedAt, lastObservedAt, now, match.id],
         });
+
+        for (const duplicate of duplicateRows) {
+          statements.push({
+            sql: `
+              UPDATE session_participants
+              SET deleted_at = ?, updated_at = ?
+              WHERE id = ? AND deleted_at IS NULL
+            `,
+            params: [now, now, duplicate.id],
+          });
+        }
         continue;
       }
 

@@ -71,7 +71,7 @@ use node::{
     node_labels, node_needs_bounds, searchable_node_text, teams_has_active_call_evidence,
 };
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
-use participants::extract_observed_participants;
+use participants::{extract_observed_participants, supports_observed_participant_capture};
 #[cfg(any(test, target_os = "linux", target_os = "windows"))]
 use platform::is_browser_active_call_control;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(unused_imports))]
@@ -900,7 +900,7 @@ pub fn capture_meeting_participants(bundle_ids: Vec<String>) -> MeetingParticipa
         if !browser_scope_poisoned && browser_roots.len() == 1 {
             let (app, root) = browser_roots.pop().unwrap();
             detected_platform = root.platform.clone();
-            if root.platform == MeetingPlatform::GoogleMeet {
+            if supports_observed_participant_capture(&root.platform) {
                 candidates.push((app, root.platform, MeetingSurface::Web, root.nodes));
             }
         } else {

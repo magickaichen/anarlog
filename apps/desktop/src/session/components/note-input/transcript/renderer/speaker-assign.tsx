@@ -21,8 +21,10 @@ import { createHuman, useHumans } from "~/contacts/queries";
 import { ContactFacehash } from "~/contacts/shared";
 import {
   addSessionParticipant,
+  persistObservedParticipants,
   useSession,
   useSessionParticipants,
+  useSessionSpeakerCandidates,
 } from "~/session/queries";
 import type { Segment } from "~/stt/live-segment";
 import { assignTranscriptSpeaker } from "~/stt/queries";
@@ -148,6 +150,7 @@ export type SpeakerParticipantOption = {
   isSessionParticipant: boolean;
   isNew?: boolean;
   isCreateOption?: boolean;
+  observedName?: string;
 };
 
 export function buildSpeakerParticipantGroups({
@@ -307,6 +310,7 @@ export function SpeakerParticipantPicker({
   const { t } = useLingui();
   const session = useSession(sessionId ?? "");
   const participantRecords = useSessionParticipants(sessionId ?? "");
+  const speakerCandidates = useSessionSpeakerCandidates(sessionId ?? "");
   const humanRecords = useHumans();
   const attachedEventParticipants = useSessionEventParticipants(
     sessionId ?? "",
@@ -328,24 +332,35 @@ export function SpeakerParticipantPicker({
   );
   const participants = useMemo(
     () =>
-      participantRecords
-        .map((participant): SpeakerParticipantOption | null => {
-          if (!participant.humanId) return null;
-          const name = participant.name.trim();
-          const email = participant.email.trim();
+      speakerCandidates
+        .map((candidate): SpeakerParticipantOption | null => {
+          const name = candidate.name.trim();
+          if (!name) return null;
+          const participant = candidate.humanId
+            ? participantRecords.find(
+                (record) => record.humanId === candidate.humanId,
+              )
+            : undefined;
+          const email = participant?.email.trim() ?? "";
           return {
-            id: participant.humanId,
-            name: name || email || t`Unknown`,
+            id:
+              candidate.humanId ||
+              `speaker-candidate:${name.toLocaleLowerCase()}`,
+            name,
             email: email || undefined,
-            avatarDataUrl:
-              avatarByHumanId.get(participant.humanId) ?? undefined,
+            avatarDataUrl: avatarByHumanId.get(candidate.humanId) ?? undefined,
             isSessionParticipant: true,
+            isNew: !candidate.humanId,
+            observedName:
+              !candidate.humanId && candidate.source === "observed"
+                ? name
+                : undefined,
           };
         })
         .filter((participant): participant is SpeakerParticipantOption =>
           Boolean(participant),
         ),
-    [avatarByHumanId, participantRecords, t],
+    [avatarByHumanId, participantRecords, speakerCandidates],
   );
 
   const contacts = useMemo(
@@ -380,7 +395,12 @@ export function SpeakerParticipantPicker({
   );
 
   const participantIds = useMemo(
-    () => new Set(participants.map((participant) => participant.id)),
+    () =>
+      new Set(
+        participants
+          .filter((participant) => !participant.isNew)
+          .map((participant) => participant.id),
+      ),
     [participants],
   );
 
@@ -459,6 +479,11 @@ export function SpeakerParticipantPicker({
       .then(async (humanId) => {
         if (!humanId) return;
         await linkHumanToSession(humanId);
+        if (sessionId && selectedOption.observedName) {
+          await persistObservedParticipants(sessionId, [
+            selectedOption.observedName,
+          ]);
+        }
         await onSelect(
           humanId,
           showAssignmentScope && applyToAllMatching ? "all" : "segment",
@@ -474,6 +499,7 @@ export function SpeakerParticipantPicker({
     linkHumanToSession,
     onSelect,
     selectedOption,
+    sessionId,
     showAssignmentScope,
   ]);
 

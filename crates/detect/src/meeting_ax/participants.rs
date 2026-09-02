@@ -29,6 +29,13 @@ pub(super) fn extract_observed_participants(
     participants
 }
 
+pub(super) fn supports_observed_participant_capture(platform: &MeetingPlatform) -> bool {
+    matches!(
+        platform,
+        MeetingPlatform::Zoom | MeetingPlatform::GoogleMeet | MeetingPlatform::MicrosoftTeams
+    )
+}
+
 fn participant_scope_paths(platform: &MeetingPlatform, nodes: &[AxNode]) -> Vec<Vec<usize>> {
     if !matches!(
         platform,

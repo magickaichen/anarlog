@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn participant_capture_supports_all_specified_web_platforms() {
+    for platform in [
+        MeetingPlatform::Zoom,
+        MeetingPlatform::GoogleMeet,
+        MeetingPlatform::MicrosoftTeams,
+    ] {
+        assert!(supports_observed_participant_capture(&platform));
+    }
+    assert!(!supports_observed_participant_capture(
+        &MeetingPlatform::Slack
+    ));
+}
+
+#[test]
 fn zoom_fixture_extracts_normalized_participant_names() {
     let nodes = [
         fixture_node(0, "AXButton", "Leave meeting", &[0, 0]),

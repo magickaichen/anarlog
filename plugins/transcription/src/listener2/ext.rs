@@ -505,6 +505,7 @@ mod tests {
             api_key: "key".to_string(),
             languages: vec![anlg_language::ISO639::En.into()],
             keywords: vec![],
+            speaker_candidates: vec![],
             num_speakers: None,
             min_speakers: None,
             max_speakers: None,
