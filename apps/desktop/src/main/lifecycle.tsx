@@ -22,6 +22,7 @@ import { useConfigValue } from "~/shared/config";
 import { useDesktopTabLifecycle } from "~/shared/desktop-tab-lifecycle";
 import { useTabs } from "~/store/zustand/tabs";
 import { LiveCaptureRecovery } from "~/stt/live-capture-recovery";
+import { TranscriptRefinementLifecycle } from "~/stt/refinement-lifecycle";
 import { ScheduledMeetingAutoStart } from "~/stt/scheduled-auto-start";
 import { MainListenerControlBridge } from "~/stt/window-control";
 
@@ -57,6 +58,7 @@ export function ClassicMainServices() {
       <OwnedSharedNotePublisher />
       <SharedNotePreviewAuthLifecycle />
       <LiveCaptureRecovery />
+      <TranscriptRefinementLifecycle />
       <ScheduledMeetingAutoStart />
       <MainListenerControlBridge />
       <ToolRegistration />

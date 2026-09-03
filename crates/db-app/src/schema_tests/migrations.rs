@@ -136,6 +136,7 @@ async fn migrations_apply_cleanly() {
             "templates",
             "transcript_live_deltas",
             "transcript_live_state",
+            "transcript_refinement_jobs",
             "transcripts",
             "voiceprint_candidates",
             "voiceprint_exemplars",

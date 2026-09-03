@@ -7,7 +7,9 @@ import { sonnerToast } from "@anlg/ui/components/ui/toast";
 import { useListener } from "./contexts";
 import { cancelMeetingRecordingDisclosure } from "./meeting-disclosure";
 import { persistTranscriptWrite } from "./persist-retry";
+import { scheduleTranscriptRefinement } from "./refinement";
 import { createTranscriptPersistenceWorker } from "./transcript-persistence-worker";
+import { getSessionKeywords } from "./useKeywords";
 import {
   canRunBatchTranscription,
   isStoppedTranscriptionError,
@@ -57,6 +59,17 @@ import { waitForSessionSearchIndex } from "~/stt/search-index-consistency";
 import type { TranscriptionPolicy } from "~/stt/transcription-policy";
 
 const CLOUDSYNC_CAPTURE_ACTIVITY = "capture";
+
+function getCurrentCaptureOffsetMs(
+  existingDurationMs: number,
+  finalDurationMs: number | null,
+) {
+  return existingDurationMs > 0 &&
+    finalDurationMs !== null &&
+    finalDurationMs + 1000 >= existingDurationMs
+    ? Math.min(existingDurationMs, finalDurationMs)
+    : 0;
+}
 
 export async function getAudioDurationMs(audioPath: string) {
   try {
@@ -160,6 +173,7 @@ export function useCaptureLifecycle(sessionId: string) {
     useConfigValue("audio_retention"),
   );
   const rememberSpeakers = useConfigValue("remember_speakers") === true;
+  const dictionaryTerms = useConfigValue("personalization_dictionary_terms");
   const { conn } = useSTTConnection(session?.transcription ?? undefined);
   const runBatch = useRunBatch(sessionId, session?.transcription);
   const setBatchTranscriptionPending = useListener(
@@ -393,6 +407,11 @@ export function useCaptureLifecycle(sessionId: string) {
         };
         cancelMeetingRecordingDisclosure(sessionId);
         await stopMeetingChatTasks();
+        const assemblyAiRefinement =
+          provider === "assemblyai" &&
+          (details.requestedLiveTranscription ||
+            details.liveTranscriptionActive);
+        let refinementQueued = false;
         if (details.audioPath) {
           try {
             await enqueueSessionAudioOperation(sessionId, () =>
@@ -400,10 +419,33 @@ export function useCaptureLifecycle(sessionId: string) {
             );
           } catch (error) {
             console.error("[listener] failed to catalog recorded audio", error);
+            if (assemblyAiRefinement) {
+              await requestRecovery();
+              return;
+            }
           }
         }
         await transcriptPersistence.flush();
         transcriptCreated ??= await transcriptExists(transcriptId);
+        if (assemblyAiRefinement && details.audioPath) {
+          const existingAudioDurationMs = await existingAudioDurationPromise;
+          const finalDurationMs = await getAudioDurationMs(details.audioPath);
+          const audioOffsetMs = getCurrentCaptureOffsetMs(
+            existingAudioDurationMs,
+            finalDurationMs,
+          );
+          await scheduleTranscriptRefinement({
+            sessionId,
+            transcriptId,
+            audioPath: details.audioPath,
+            audioOffsetMs,
+            audioEndMs: finalDurationMs ?? undefined,
+            startedAt,
+            languages: languages ?? [],
+            keywords: await getSessionKeywords({ sessionId, dictionaryTerms }),
+          });
+          refinementQueued = true;
+        }
         const refineSpeakerDiarization = shouldRefineSpeakerDiarization();
         if (transcriptCreated) {
           try {
@@ -416,16 +458,17 @@ export function useCaptureLifecycle(sessionId: string) {
           }
         }
 
-        const postCaptureAction = pendingSummaryMode
-          ? ("enhance_only" as const)
-          : getPostCaptureAction(
-              {
-                ...details,
-                refineSpeakerDiarization,
-                transcriptWriteFailed: Boolean(transcriptWriteError),
-              },
-              canRunBatchRef.current,
-            );
+        const postCaptureAction =
+          pendingSummaryMode || refinementQueued
+            ? ("enhance_only" as const)
+            : getPostCaptureAction(
+                {
+                  ...details,
+                  refineSpeakerDiarization,
+                  transcriptWriteFailed: Boolean(transcriptWriteError),
+                },
+                canRunBatchRef.current,
+              );
         const repairReasons = pendingSummaryMode
           ? []
           : getPostCaptureRepairReasons({
@@ -446,12 +489,10 @@ export function useCaptureLifecycle(sessionId: string) {
             const finalAudioDurationMs = preserveExistingTranscript
               ? await getAudioDurationMs(details.audioPath!)
               : null;
-            const audioOffsetMs =
-              existingAudioDurationMs > 0 &&
-              finalAudioDurationMs !== null &&
-              finalAudioDurationMs + 1_000 >= existingAudioDurationMs
-                ? Math.min(existingAudioDurationMs, finalAudioDurationMs)
-                : 0;
+            const audioOffsetMs = getCurrentCaptureOffsetMs(
+              existingAudioDurationMs,
+              finalAudioDurationMs,
+            );
             await runBatchRef.current(details.audioPath!, {
               deferAudioFinalization: true,
               notifyOnCompletion: !details.liveTranscriptionActive,
@@ -647,7 +688,7 @@ export function useCaptureLifecycle(sessionId: string) {
         }
 
         try {
-          if (details.audioPath && transcriptIsComplete) {
+          if (details.audioPath && transcriptIsComplete && !refinementQueued) {
             await maybeExtractVoiceprintCandidates({
               enabled: rememberSpeakers,
               sessionId,
@@ -676,6 +717,7 @@ export function useCaptureLifecycle(sessionId: string) {
         // later repair, regardless of the retention policy.
         if (
           (postCaptureAction !== "batch_then_enhance" || batchCompleted) &&
+          !refinementQueued &&
           !transcriptWriteError
         ) {
           await deleteProcessedAudioForRetention(audioRetention, sessionId);
@@ -736,6 +778,12 @@ export function useCaptureLifecycle(sessionId: string) {
         details: Parameters<OnStoppedCallback>[1],
       ) => {
         if (
+          provider === "assemblyai" &&
+          (details.requestedLiveTranscription ||
+            details.liveTranscriptionActive)
+        )
+          return;
+        if (
           !pendingSummaryMode &&
           details.audioPath &&
           canRunBatchRef.current &&
@@ -784,6 +832,7 @@ export function useCaptureLifecycle(sessionId: string) {
     },
     [
       audioRetention,
+      dictionaryTerms,
       conn?.model,
       conn?.provider,
       participantHumanIds,

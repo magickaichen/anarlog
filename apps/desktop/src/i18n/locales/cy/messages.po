@@ -2563,6 +2563,10 @@ msgstr ""
 msgid "Loading calendars..."
 msgstr ""
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Loading changes…"
+msgstr ""
+
 #: src/session-sharing/delivery-panel.tsx
 #: src/settings/automations/starter-config.tsx
 msgid "Loading channels…"
@@ -3568,6 +3572,26 @@ msgstr ""
 msgid "Redo"
 msgstr ""
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refined transcript"
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refined transcript ready. Review changes before replacing your edits."
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refinement failed. Your live transcript is kept."
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refinement queued. Live text remains available."
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refining transcript. Live text remains available."
+msgstr ""
+
 #: src/settings/general/account.tsx
 msgid "Refresh billing status"
 msgstr ""
@@ -3681,6 +3705,10 @@ msgstr ""
 msgid "Replace repository"
 msgstr ""
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Replace with refined transcript"
+msgstr ""
+
 #: src/session/components/note-input/search/bar.tsx
 msgid "Replace with..."
 msgstr ""
@@ -3790,6 +3818,14 @@ msgstr ""
 #: src/settings/sync/index.tsx
 #: src/sidebar/toast/registry.tsx
 msgid "Retry"
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Retry refinement"
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Review changes"
 msgstr ""
 
 #: src/session/components/pending-proposals-banner.tsx
@@ -4873,6 +4909,10 @@ msgstr ""
 msgid "Transcript"
 msgstr ""
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Transcript refined"
+msgstr ""
+
 #: src/settings/ai/stt/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Transcription"
@@ -5352,6 +5392,10 @@ msgstr ""
 
 #: src/session-sharing/comments.tsx
 msgid "Your comment couldn’t be added. Try again."
+msgstr ""
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Your current transcript"
 msgstr ""
 
 #: src/settings/dictionary/index.tsx

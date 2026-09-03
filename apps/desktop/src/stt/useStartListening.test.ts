@@ -1,10 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   MAX_SENT_MEETING_DISCLOSURE_SESSIONS,
   startMeetingRecordingDisclosure,
 } from "./meeting-disclosure";
+import { getTranscriptRefinement } from "./refinement";
 import { getSessionKeywords } from "./useKeywords";
 import {
   getPostCaptureAction,
@@ -15,6 +18,10 @@ import {
 } from "./useStartListening";
 
 import { enqueueSessionAudioOperation } from "~/session/audio-operations";
+
+const refinementDb = vi.hoisted(() => ({
+  current: null as DatabaseSync | null,
+}));
 
 const {
   queueAutoEnhanceMock,
@@ -127,9 +134,20 @@ const {
 vi.mock("@anlg/plugin-db", () => ({
   beginCloudsyncActivity: beginCloudsyncActivityMock,
   endCloudsyncActivity: endCloudsyncActivityMock,
-  execute: vi.fn(async () => []),
+  execute: vi.fn(async (sql: string, params: any[] = []) =>
+    refinementDb.current
+      ? refinementDb.current.prepare(sql).all(...params)
+      : [],
+  ),
   executeProxy: vi.fn(async () => []),
-  executeTransaction: vi.fn(async () => []),
+  executeTransaction: vi.fn(
+    async (statements: Array<{ sql: string; params: any[] }>) =>
+      refinementDb.current
+        ? statements.map(({ sql, params }) =>
+            Number(refinementDb.current!.prepare(sql).run(...params).changes),
+          )
+        : [],
+  ),
   subscribe: vi.fn(async () => () => {}),
 }));
 
@@ -1038,6 +1056,69 @@ describe("useStartListening", () => {
     expect(queueAutoEnhanceIfSummaryEmptyMock).toHaveBeenCalledWith(
       "session-1",
     );
+  });
+
+  test("an AssemblyAI meeting with no known participants queues refinement only after audio finalization", async () => {
+    const db = new DatabaseSync(":memory:");
+    refinementDb.current = db;
+    for (const name of [
+      "20260710223922_canonical_data_model",
+      "20260815100000_transcript_content_revision",
+      "20260903100000_transcript_refinement_jobs",
+    ]) {
+      db.exec(
+        readFileSync(`../../crates/db-app/migrations/${name}.sql`, "utf8"),
+      );
+    }
+    try {
+      useSTTConnectionMock.mockReturnValue({
+        conn: {
+          provider: "assemblyai",
+          model: "universal-3-5-pro-realtime",
+          baseUrl: "https://api.assemblyai.com",
+          apiKey: "test",
+        },
+      });
+      useSessionParticipantHumanIdsMock.mockReturnValue([]);
+      let finalizeAudio!: () => void;
+      catalogLocalSessionAudioMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finalizeAudio = resolve;
+        }),
+      );
+      const { result } = renderHook(() => useStartListening("session-1"));
+      await act(async () => {
+        await result.current();
+      });
+      const callbacks = startMock.mock.calls[0]?.[1];
+      let stopped!: Promise<void>;
+      await act(async () => {
+        stopped = callbacks.onStopped("session-1", {
+          durationSeconds: 42,
+          audioPath: "/tmp/session.wav",
+          requestedLiveTranscription: true,
+          liveTranscriptionActive: true,
+          needsBatchRepair: false,
+        });
+      });
+      expect(await getTranscriptRefinement("generated-id")).toBeNull();
+      await act(async () => {
+        finalizeAudio();
+        await stopped;
+      });
+      expect(await getTranscriptRefinement("generated-id")).toMatchObject({
+        status: "pending",
+        sessionId: "session-1",
+        input: {
+          target: { provider: "assemblyai", model: "universal-3-5-pro" },
+        },
+      });
+      expect(runBatchMock).not.toHaveBeenCalled();
+      expect(deleteProcessedAudioForRetentionMock).not.toHaveBeenCalled();
+    } finally {
+      refinementDb.current = null;
+      db.close();
+    }
   });
 
   test.each([

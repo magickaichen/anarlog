@@ -31,6 +31,26 @@ import { createListenerStore } from "~/store/zustand/listener";
 import { ListenerProvider } from "~/stt/contexts";
 
 describe("useTranscriptScreen subscriptions", () => {
+  it("keeps readable live words on screen while a refinement batch is running", () => {
+    const store = createListenerStore();
+    store.getState().handleBatchStarted("session-1");
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ListenerProvider store={store}>{children}</ListenerProvider>
+    );
+    const { result } = renderHook(
+      () =>
+        useTranscriptScreen({
+          sessionId: "session-1",
+          preserveTranscriptWhileBatching: true,
+        }),
+      { wrapper },
+    );
+    expect(result.current).toMatchObject({
+      kind: "ready",
+      transcriptIds: ["transcript-1"],
+    });
+  });
+
   it("does not rerender for amplitude-only listener updates", () => {
     const store = createListenerStore();
     const wrapper = ({ children }: { children: ReactNode }) => (
