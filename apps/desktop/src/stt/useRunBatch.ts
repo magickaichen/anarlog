@@ -11,7 +11,19 @@ import {
 } from "./batch-target-preflight";
 import { useListener } from "./contexts";
 import { persistTranscriptWrite } from "./persist-retry";
+import { reconcileRefinedSpeakerClusters } from "./refinement-speakers";
+import {
+  EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE,
+  isTranscriptionAuthenticationError,
+} from "./transcription-errors";
 import { useSTTConnection } from "./useSTTConnection";
+export {
+  STOPPED_TRANSCRIPTION_ERROR_MESSAGE,
+  EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE,
+  isStoppedTranscriptionError,
+  isTerminalTranscriptionError,
+  isTranscriptionAuthenticationError,
+} from "./transcription-errors";
 
 import { useAuth } from "~/auth";
 import { withCloudsyncActivity } from "~/db/cloudsync-activity";
@@ -36,6 +48,7 @@ import {
   createTranscript,
   getTranscriptRecord,
   type TranscriptRecord,
+  type TranscriptInsert,
 } from "~/stt/queries";
 import {
   normalizeTranscriptionLanguages,
@@ -44,6 +57,7 @@ import {
 import type { SpeakerHintWithId, WordWithId } from "~/stt/types";
 
 type RunOptions = {
+  deferPromotion?: boolean;
   deferAudioFinalization?: boolean;
   handlePersist?: BatchPersistCallback;
   notifyOnCompletion?: boolean;
@@ -62,6 +76,7 @@ type RunOptions = {
     | {
         scope: "current_capture";
         audioOffsetMs: number;
+        audioEndMs?: number;
         replaceTranscriptId?: string;
         startedAt: number;
       };
@@ -94,10 +109,6 @@ const DIRECT_BATCH_PROVIDERS: Set<TranscriptionParams["provider"]> = new Set([
   "xai",
 ]);
 
-export const STOPPED_TRANSCRIPTION_ERROR_MESSAGE = "Transcription stopped.";
-export const EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE =
-  "Batch transcription did not include the current recording.";
-const MIN_REFINED_SPEAKER_OVERLAP_RATIO = 0.6;
 export function getBatchProvider(
   provider: string,
   model: string,
@@ -159,17 +170,18 @@ function prepareTranscriptPromotion(
   const offsetMs = Number.isFinite(promotion.audioOffsetMs)
     ? Math.max(0, promotion.audioOffsetMs)
     : 0;
+  const endBoundMs = promotion.audioEndMs ?? Infinity;
   const currentWords = words.flatMap((word) => {
     const startMs = word.start_ms ?? 0;
     const endMs = word.end_ms ?? startMs;
-    if (endMs <= offsetMs) {
+    if (endMs <= offsetMs || startMs >= endBoundMs) {
       return [];
     }
     return [
       {
         ...word,
         start_ms: Math.max(0, startMs - offsetMs),
-        end_ms: Math.max(0, endMs - offsetMs),
+        end_ms: Math.max(0, Math.min(endMs, endBoundMs) - offsetMs),
       },
     ];
   });
@@ -187,277 +199,7 @@ function prepareTranscriptPromotion(
   };
 }
 
-function parseHintValue(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function speakerKeysByWordId(hints: SpeakerHintWithId[]) {
-  const keys = new Map<string, string>();
-
-  for (const hint of hints) {
-    if (hint.type !== "provider_speaker_index" || !hint.word_id) {
-      continue;
-    }
-
-    const value = parseHintValue(hint.value);
-    const channel = value?.channel;
-    const speakerIndex = value?.speaker_index;
-    if (typeof channel !== "number" || typeof speakerIndex !== "number") {
-      continue;
-    }
-
-    keys.set(hint.word_id, `${channel}:${speakerIndex}`);
-  }
-
-  return keys;
-}
-
-function parseSpeakerKey(key: string) {
-  const separator = key.indexOf(":");
-  if (separator <= 0 || separator === key.length - 1) {
-    return null;
-  }
-
-  const channel = Number(key.slice(0, separator));
-  const speakerIndex = Number(key.slice(separator + 1));
-
-  return Number.isFinite(channel) && Number.isFinite(speakerIndex)
-    ? { channel, speakerIndex }
-    : null;
-}
-
-export function reconcileRefinedSpeakerClusters(
-  source: TranscriptRecord,
-  words: WordWithId[],
-  hints: SpeakerHintWithId[],
-): SpeakerHintWithId[] {
-  const sourceSpeakerKeys = speakerKeysByWordId(source.speakerHints);
-  const targetSpeakerKeys = speakerKeysByWordId(hints);
-  if (sourceSpeakerKeys.size === 0 || targetSpeakerKeys.size === 0) {
-    return hints;
-  }
-
-  const sourceIntervalsByChannel = new Map<
-    number,
-    Array<{
-      speakerKey: string;
-      startMs: number;
-      endMs: number;
-    }>
-  >();
-
-  for (const word of source.words) {
-    const speakerKey = sourceSpeakerKeys.get(word.id);
-    const speaker = speakerKey ? parseSpeakerKey(speakerKey) : null;
-    if (!speakerKey || !speaker) {
-      continue;
-    }
-
-    const startMs = word.start_ms ?? 0;
-    const endMs = Math.max(startMs + 1, word.end_ms ?? startMs);
-    const intervals = sourceIntervalsByChannel.get(speaker.channel) ?? [];
-    intervals.push({ speakerKey, startMs, endMs });
-    sourceIntervalsByChannel.set(speaker.channel, intervals);
-  }
-
-  for (const intervals of sourceIntervalsByChannel.values()) {
-    intervals.sort((left, right) => left.startMs - right.startMs);
-  }
-
-  const targetWords = words
-    .flatMap((word) => {
-      const speakerKey = targetSpeakerKeys.get(word.id);
-      const speaker = speakerKey ? parseSpeakerKey(speakerKey) : null;
-      if (!speakerKey || !speaker) {
-        return [];
-      }
-
-      const startMs = word.start_ms ?? 0;
-      return [
-        {
-          speakerKey,
-          channel: speaker.channel,
-          startMs,
-          endMs: Math.max(startMs + 1, word.end_ms ?? startMs),
-        },
-      ];
-    })
-    .sort(
-      (left, right) =>
-        left.channel - right.channel || left.startMs - right.startMs,
-    );
-  const cursors = new Map<number, number>();
-  const weights = new Map<string, Map<string, number>>();
-
-  for (const word of targetWords) {
-    const sourceIntervals = sourceIntervalsByChannel.get(word.channel);
-    if (!sourceIntervals) {
-      continue;
-    }
-
-    let cursor = cursors.get(word.channel) ?? 0;
-    while (
-      cursor < sourceIntervals.length &&
-      sourceIntervals[cursor].endMs <= word.startMs
-    ) {
-      cursor += 1;
-    }
-    cursors.set(word.channel, cursor);
-
-    for (
-      let index = cursor;
-      index < sourceIntervals.length &&
-      sourceIntervals[index].startMs < word.endMs;
-      index += 1
-    ) {
-      const source = sourceIntervals[index];
-      const overlapMs =
-        Math.min(word.endMs, source.endMs) -
-        Math.max(word.startMs, source.startMs);
-      if (overlapMs <= 0) {
-        continue;
-      }
-
-      const sourceWeights = weights.get(word.speakerKey) ?? new Map();
-      sourceWeights.set(
-        source.speakerKey,
-        (sourceWeights.get(source.speakerKey) ?? 0) + overlapMs,
-      );
-      weights.set(word.speakerKey, sourceWeights);
-    }
-  }
-
-  const sourceSpeakerByTarget = new Map<string, number>();
-  for (const [targetSpeakerKey, sourceWeights] of weights) {
-    const candidates = [...sourceWeights].sort(
-      ([leftKey, leftWeight], [rightKey, rightWeight]) =>
-        rightWeight - leftWeight || leftKey.localeCompare(rightKey),
-    );
-    const totalOverlapMs = candidates.reduce(
-      (total, [, overlapMs]) => total + overlapMs,
-      0,
-    );
-    const [sourceSpeakerKey, overlapMs] = candidates[0] ?? [];
-    const sourceSpeaker = sourceSpeakerKey
-      ? parseSpeakerKey(sourceSpeakerKey)
-      : null;
-    if (
-      sourceSpeaker &&
-      totalOverlapMs > 0 &&
-      overlapMs / totalOverlapMs >= MIN_REFINED_SPEAKER_OVERLAP_RATIO
-    ) {
-      sourceSpeakerByTarget.set(targetSpeakerKey, sourceSpeaker.speakerIndex);
-    }
-  }
-
-  const usedSpeakerIndicesByChannel = new Map<number, Set<number>>();
-  for (const [targetSpeakerKey, speakerIndex] of sourceSpeakerByTarget) {
-    const targetSpeaker = parseSpeakerKey(targetSpeakerKey);
-    if (!targetSpeaker) {
-      continue;
-    }
-
-    const usedSpeakerIndices =
-      usedSpeakerIndicesByChannel.get(targetSpeaker.channel) ?? new Set();
-    usedSpeakerIndices.add(speakerIndex);
-    usedSpeakerIndicesByChannel.set(targetSpeaker.channel, usedSpeakerIndices);
-  }
-
-  const collidingTargetSpeakers: Array<{
-    speakerKey: string;
-    channel: number;
-  }> = [];
-  for (const targetSpeakerKey of new Set(targetSpeakerKeys.values())) {
-    if (sourceSpeakerByTarget.has(targetSpeakerKey)) {
-      continue;
-    }
-
-    const targetSpeaker = parseSpeakerKey(targetSpeakerKey);
-    if (!targetSpeaker) {
-      continue;
-    }
-
-    const usedSpeakerIndices =
-      usedSpeakerIndicesByChannel.get(targetSpeaker.channel) ?? new Set();
-    if (usedSpeakerIndices.has(targetSpeaker.speakerIndex)) {
-      collidingTargetSpeakers.push({
-        speakerKey: targetSpeakerKey,
-        channel: targetSpeaker.channel,
-      });
-    } else {
-      usedSpeakerIndices.add(targetSpeaker.speakerIndex);
-    }
-    usedSpeakerIndicesByChannel.set(targetSpeaker.channel, usedSpeakerIndices);
-  }
-
-  for (const { speakerKey, channel } of collidingTargetSpeakers) {
-    const usedSpeakerIndices = usedSpeakerIndicesByChannel.get(channel);
-    if (!usedSpeakerIndices) {
-      continue;
-    }
-
-    let speakerIndex = Math.max(...usedSpeakerIndices) + 1;
-    while (usedSpeakerIndices.has(speakerIndex)) {
-      speakerIndex += 1;
-    }
-    usedSpeakerIndices.add(speakerIndex);
-    sourceSpeakerByTarget.set(speakerKey, speakerIndex);
-  }
-
-  return hints.map((hint) => {
-    if (hint.type !== "provider_speaker_index" || !hint.word_id) {
-      return hint;
-    }
-
-    const targetSpeakerKey = targetSpeakerKeys.get(hint.word_id);
-    const speakerIndex = targetSpeakerKey
-      ? sourceSpeakerByTarget.get(targetSpeakerKey)
-      : undefined;
-    const value = parseHintValue(hint.value);
-    if (speakerIndex === undefined || !value) {
-      return hint;
-    }
-
-    return {
-      ...hint,
-      value: JSON.stringify({ ...value, speaker_index: speakerIndex }),
-    };
-  });
-}
-
-export function isStoppedTranscriptionError(error: unknown) {
-  return (
-    (error instanceof Error ? error.message : String(error)) ===
-    STOPPED_TRANSCRIPTION_ERROR_MESSAGE
-  );
-}
-
-export function isTranscriptionAuthenticationError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /authentication failed|invalid_token|unauthorized|\b401\b/i.test(
-    message,
-  );
-}
-
-export function isTerminalTranscriptionError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    error instanceof BatchResponseProcessingError ||
-    message === EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE ||
-    isTranscriptionAuthenticationError(error) ||
-    /corrupt or unsupported|unsupported (?:audio|data)|invalid audio|no speech|empty transcript/i.test(
-      message,
-    ) ||
-    /\b(?:400|403|404|413|415|422)\b|bad request|invalid api key/i.test(message)
-  );
-}
+export { reconcileRefinedSpeakerClusters } from "./refinement-speakers";
 
 export function getSessionSpeakerCount(
   participantHumanIds: Iterable<string>,
@@ -599,7 +341,7 @@ export const useRunBatch = (
         options?.promotion?.scope === "current_capture"
           ? options.promotion.replaceTranscriptId
           : undefined;
-      if (replaceTranscriptId) {
+      if (replaceTranscriptId && !options?.deferPromotion) {
         try {
           refinedTranscriptSource =
             await getTranscriptRecord(replaceTranscriptId);
@@ -621,6 +363,7 @@ export const useRunBatch = (
       }
       let transcriptId: string | null = null;
       const inferredNumSpeakers =
+        !options?.deferPromotion &&
         options?.numSpeakers === undefined &&
         options?.minSpeakers === undefined &&
         options?.maxSpeakers === undefined
@@ -779,24 +522,26 @@ export const useRunBatch = (
                         promoted.hints,
                       )
                     : promoted.hints;
+                  const candidate: TranscriptInsert = {
+                    id: completedTranscriptId,
+                    sessionId,
+                    ownerUserId: session?.user_id ?? "",
+                    createdAt,
+                    startedAt: promoted.startedAt ?? startedAt,
+                    memo: memoMd,
+                    source: "batch_transcription",
+                    provider: target.requestedProvider,
+                    model: target.model,
+                    languages,
+                    providerModel,
+                    words: promoted.words,
+                    speakerHints,
+                    replaceSession: promoted.replaceSession,
+                    replaceTranscriptId: promoted.replaceTranscriptId,
+                  };
+                  if (options?.deferPromotion) return candidate;
                   await persistTranscriptWrite(() =>
-                    createTranscript({
-                      id: completedTranscriptId,
-                      sessionId,
-                      ownerUserId: session?.user_id ?? "",
-                      createdAt,
-                      startedAt: promoted.startedAt ?? startedAt,
-                      memo: memoMd,
-                      source: "batch_transcription",
-                      provider: target.requestedProvider,
-                      model: target.model,
-                      languages,
-                      providerModel,
-                      words: promoted.words,
-                      speakerHints,
-                      replaceSession: promoted.replaceSession,
-                      replaceTranscriptId: promoted.replaceTranscriptId,
-                    }),
+                    createTranscript(candidate),
                   );
                   await maybeExtractVoiceprintCandidates({
                     enabled: rememberSpeakers,
@@ -806,6 +551,8 @@ export const useRunBatch = (
                   });
                 }
               }
+              if (options?.deferPromotion)
+                throw new Error(EMPTY_CURRENT_CAPTURE_TRANSCRIPT_ERROR_MESSAGE);
               if (!options?.deferAudioFinalization) {
                 try {
                   await persistTranscriptWrite(() =>

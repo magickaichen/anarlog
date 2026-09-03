@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import { cn } from "@anlg/utils";
 
 import { useRegenerateTranscript } from "./actions";
+import { TranscriptRefinementStatus } from "./refinement-status";
 import { TranscriptViewer } from "./renderer";
 import { BatchState } from "./screens/batch";
 import { TranscriptEmptyState } from "./screens/empty";
@@ -13,6 +14,7 @@ import { TranscriptListeningState } from "./screens/listening";
 import { useTranscriptScreen } from "./state";
 
 import { useListener } from "~/stt/contexts";
+import { useSessionRefinementStatus } from "~/stt/refinement-queries";
 import { useUploadFile } from "~/stt/useUploadFile";
 
 export function TranscriptEditButton({
@@ -76,7 +78,13 @@ function TranscriptContent({
   scrollRef: RefObject<HTMLDivElement | null>;
   editMode: boolean;
 }) {
-  const screen = useTranscriptScreen({ sessionId });
+  const refinements = useSessionRefinementStatus(sessionId);
+  const screen = useTranscriptScreen({
+    sessionId,
+    preserveTranscriptWhileBatching: refinements.some(
+      (job) => job.status === "running",
+    ),
+  });
   const { uploadAudio, uploadTranscript } = useUploadFile(sessionId);
   const regenerateTranscript = useRegenerateTranscript(sessionId);
   const stopTranscription = useListener((state) => state.stopTranscription);
@@ -86,6 +94,9 @@ function TranscriptContent({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
+      {refinements.map((job) => (
+        <TranscriptRefinementStatus key={job.id} job={job} />
+      ))}
       {screen.kind === "running_batch" && (
         <TranscriptEmptyState
           isBatching

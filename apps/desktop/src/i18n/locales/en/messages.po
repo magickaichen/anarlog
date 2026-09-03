@@ -2563,6 +2563,10 @@ msgstr "Loading Auto format..."
 msgid "Loading calendars..."
 msgstr "Loading calendars..."
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Loading changes…"
+msgstr "Loading changes…"
+
 #: src/session-sharing/delivery-panel.tsx
 #: src/settings/automations/starter-config.tsx
 msgid "Loading channels…"
@@ -3568,6 +3572,26 @@ msgstr "Recording not found. It may have been deleted."
 msgid "Redo"
 msgstr "Redo"
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refined transcript"
+msgstr "Refined transcript"
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refined transcript ready. Review changes before replacing your edits."
+msgstr "Refined transcript ready. Review changes before replacing your edits."
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refinement failed. Your live transcript is kept."
+msgstr "Refinement failed. Your live transcript is kept."
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refinement queued. Live text remains available."
+msgstr "Refinement queued. Live text remains available."
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Refining transcript. Live text remains available."
+msgstr "Refining transcript. Live text remains available."
+
 #: src/settings/general/account.tsx
 msgid "Refresh billing status"
 msgstr "Refresh billing status"
@@ -3681,6 +3705,10 @@ msgstr "Replace all"
 msgid "Replace repository"
 msgstr "Replace repository"
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Replace with refined transcript"
+msgstr "Replace with refined transcript"
+
 #: src/session/components/note-input/search/bar.tsx
 msgid "Replace with..."
 msgstr "Replace with..."
@@ -3791,6 +3819,14 @@ msgstr "Retention (days)"
 #: src/sidebar/toast/registry.tsx
 msgid "Retry"
 msgstr "Retry"
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Retry refinement"
+msgstr "Retry refinement"
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Review changes"
+msgstr "Review changes"
 
 #: src/session/components/pending-proposals-banner.tsx
 msgid "Review memo"
@@ -4873,6 +4909,10 @@ msgstr "Transcribing…"
 msgid "Transcript"
 msgstr "Transcript"
 
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Transcript refined"
+msgstr "Transcript refined"
+
 #: src/settings/ai/stt/index.tsx
 #: src/sidebar/settings.tsx
 msgid "Transcription"
@@ -5353,6 +5393,10 @@ msgstr "Your Account"
 #: src/session-sharing/comments.tsx
 msgid "Your comment couldn’t be added. Try again."
 msgstr "Your comment couldn’t be added. Try again."
+
+#: src/session/components/note-input/transcript/refinement-status.tsx
+msgid "Your current transcript"
+msgstr "Your current transcript"
 
 #: src/settings/dictionary/index.tsx
 msgid "Your dictionary is empty"

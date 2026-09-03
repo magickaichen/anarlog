@@ -10,7 +10,7 @@ use owhisper_interface::batch::{
 use serde::{Deserialize, Serialize};
 
 use super::AssemblyAIAdapter;
-use super::language::BATCH_LANGUAGES;
+use super::language::{BATCH_LANGUAGES, U35_STREAMING_LANGUAGES};
 use crate::adapter::http::ensure_success;
 use crate::adapter::{BatchFuture, BatchSttAdapter, ClientWithMiddleware, append_path_if_missing};
 use crate::error::Error;
@@ -31,6 +31,14 @@ impl BatchSttAdapter for AssemblyAIAdapter {
         languages: &[anlg_language::Language],
         model: Option<&str>,
     ) -> bool {
+        let supported = if matches!(
+            model,
+            Some("universal-3-5-pro" | "universal-3-5-pro-realtime")
+        ) {
+            U35_STREAMING_LANGUAGES
+        } else {
+            BATCH_LANGUAGES
+        };
         matches!(
             model,
             None | Some(
@@ -42,7 +50,7 @@ impl BatchSttAdapter for AssemblyAIAdapter {
             )
         ) && languages
             .iter()
-            .all(|language| BATCH_LANGUAGES.contains(&language.iso639().code()))
+            .all(|language| supported.contains(&language.iso639().code()))
     }
 
     fn transcribe_file<'a, P: AsRef<Path> + Send + 'a>(
@@ -153,7 +161,7 @@ impl AssemblyAIAdapter {
                 vec!["universal-3-pro".to_string(), "universal-2".to_string()]
             }
             Some("universal-3-5-pro" | "universal-3-5-pro-realtime") => {
-                vec!["universal-3-5-pro".to_string(), "universal-2".to_string()]
+                vec!["universal-3-5-pro".to_string()]
             }
             Some(m) if !m.is_empty() && !crate::providers::is_meta_model(m) => {
                 vec![m.to_string()]
@@ -442,6 +450,18 @@ mod tests {
     }
 
     #[test]
+    fn explicit_u35_rejects_languages_that_need_a_different_model() {
+        assert!(!AssemblyAIAdapter.is_supported_languages(
+            &[anlg_language::ISO639::Ko.into()],
+            Some("universal-3-5-pro"),
+        ));
+        assert!(AssemblyAIAdapter.is_supported_languages(
+            &[anlg_language::ISO639::Es.into()],
+            Some("universal-3-5-pro"),
+        ));
+    }
+
+    #[test]
     fn transcript_response_reads_the_provider_reported_model() {
         let response: TranscriptResponse = serde_json::from_value(serde_json::json!({
             "id": "transcript-id",
@@ -480,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_explicit_u35_models_expand_to_current_model_stack() {
+    fn batch_explicit_u35_models_do_not_add_a_fallback() {
         for model in ["universal-3-5-pro", "universal-3-5-pro-realtime"] {
             let params = ListenParams {
                 model: Some(model.to_string()),
@@ -489,7 +509,7 @@ mod tests {
 
             assert_eq!(
                 AssemblyAIAdapter::resolve_batch_speech_models(&params),
-                vec!["universal-3-5-pro".to_string(), "universal-2".to_string()]
+                vec!["universal-3-5-pro".to_string()]
             );
         }
     }
@@ -631,6 +651,70 @@ mod tests {
         assert_eq!(
             result.results.channels[1].alternatives[0].words[0].speaker,
             Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_refinement_request_preserves_target_language_and_diarization() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/upload"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"upload_url": "https://example.test/audio"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v2/transcript"))
+            .and(body_json(serde_json::json!({
+                "audio_url": "https://example.test/audio",
+                "speech_models": ["universal-3-5-pro"],
+                "language_code": "es",
+                "speaker_labels": true,
+                "multichannel": true,
+                "keyterms_prompt": ["Anarlog"]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "job", "status": "queued"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/transcript/job"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "job", "status": "completed", "speech_model_used": "universal-3-5-pro",
+                "words": [{"text": "Hola", "start": 0, "end": 400, "confidence": 0.99, "speaker": "A", "channel": "1"}]
+            })))
+            .expect(1)
+            .mount(&server).await;
+        let params = ListenParams {
+            model: Some("universal-3-5-pro".to_string()),
+            languages: vec![anlg_language::ISO639::Es.into()],
+            channels: 2,
+            keywords: vec!["Anarlog".to_string()],
+            ..Default::default()
+        };
+        let result = AssemblyAIAdapter
+            .transcribe_file(
+                &create_client(),
+                &server.uri(),
+                "test-key",
+                &params,
+                anlg_data::english_1::AUDIO_PATH,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.metadata["speech_model"], "universal-3-5-pro");
+        assert_eq!(
+            result.results.channels[0].alternatives[0].words[0].speaker,
+            Some(0)
         );
     }
 

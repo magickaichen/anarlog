@@ -53,7 +53,7 @@ type TranscriptMutationSqlRow = {
   pending_deltas_json: string;
 };
 
-type TranscriptInsert = {
+export type TranscriptInsert = {
   id: string;
   sessionId: string;
   ownerUserId: string;
@@ -71,6 +71,8 @@ type TranscriptInsert = {
   speakerHints?: SpeakerHintWithId[];
   replaceSession?: boolean;
   replaceTranscriptId?: string;
+  refinementJobId?: string;
+  expectedSourceRevision?: number;
 };
 
 type TranscriptTargetSqlRow = {
@@ -396,7 +398,11 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
       input.languages ?? (input.language ? [input.language] : undefined),
     );
     const language = languages.length === 1 ? languages[0] : "";
-    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const statements: Array<{
+      sql: string;
+      params: unknown[];
+      expectedRowsAffected?: number;
+    }> = [];
 
     if (input.replaceSession) {
       statements.push({
@@ -413,8 +419,20 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
           UPDATE transcripts
           SET deleted_at = ?, updated_at = ?
           WHERE id = ? AND session_id = ? AND deleted_at IS NULL
+          ${input.expectedSourceRevision === undefined ? "" : "AND content_revision = ?"}
         `,
-        params: [now, now, input.replaceTranscriptId, input.sessionId],
+        params: [
+          now,
+          now,
+          input.replaceTranscriptId,
+          input.sessionId,
+          ...(input.expectedSourceRevision === undefined
+            ? []
+            : [input.expectedSourceRevision]),
+        ],
+        ...(input.expectedSourceRevision === undefined
+          ? {}
+          : { expectedRowsAffected: 1 }),
       });
     }
 
@@ -451,7 +469,16 @@ export function createTranscript(input: TranscriptInsert): Promise<void> {
         now,
         input.sessionId,
       ],
+      ...(input.refinementJobId ? { expectedRowsAffected: 1 } : {}),
     });
+
+    if (input.refinementJobId) {
+      statements.push({
+        sql: `UPDATE transcript_refinement_jobs SET status = 'succeeded', error = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'awaiting_confirmation')`,
+        params: [now, input.refinementJobId],
+        expectedRowsAffected: 1,
+      });
+    }
 
     await executeTransaction(statements);
   });
@@ -641,35 +668,41 @@ export function updateTranscriptSegmentText({
   wordIds: string[];
   text: string;
 }): Promise<void> {
-  return mutateTranscript(transcriptId, (store) => {
-    const selectedWordIds = new Set(wordIds);
-    const words = parseTranscriptWords(store, transcriptId);
-    const selectedWords = words.filter((word) => selectedWordIds.has(word.id));
-    if (selectedWords.length === 0) {
-      return;
-    }
-
-    const tokens = text.match(/\S+/g) ?? [];
-    const textByWordId = new Map<string, string>();
-    for (const [index, word] of selectedWords.entries()) {
-      const isLastWord = index === selectedWords.length - 1;
-      textByWordId.set(
-        word.id,
-        isLastWord ? tokens.slice(index).join(" ") : (tokens[index] ?? ""),
+  return mutateTranscript(
+    transcriptId,
+    (store) => {
+      const selectedWordIds = new Set(wordIds);
+      const words = parseTranscriptWords(store, transcriptId);
+      const selectedWords = words.filter((word) =>
+        selectedWordIds.has(word.id),
       );
-    }
+      if (selectedWords.length === 0) {
+        return;
+      }
 
-    updateTranscriptWords(
-      store,
-      transcriptId,
-      words.map((word) => {
-        const nextText = textByWordId.get(word.id);
-        return nextText === undefined || nextText === word.text
-          ? word
-          : { ...word, text: nextText };
-      }),
-    );
-  });
+      const tokens = text.match(/\S+/g) ?? [];
+      const textByWordId = new Map<string, string>();
+      for (const [index, word] of selectedWords.entries()) {
+        const isLastWord = index === selectedWords.length - 1;
+        textByWordId.set(
+          word.id,
+          isLastWord ? tokens.slice(index).join(" ") : (tokens[index] ?? ""),
+        );
+      }
+
+      updateTranscriptWords(
+        store,
+        transcriptId,
+        words.map((word) => {
+          const nextText = textByWordId.get(word.id);
+          return nextText === undefined || nextText === word.text
+            ? word
+            : { ...word, text: nextText };
+        }),
+      );
+    },
+    true,
+  );
 }
 
 export function softDeleteTranscript(transcriptId: string): Promise<void> {
@@ -764,6 +797,7 @@ function parseJsonArray<T>(value: string, rowId: string, field: string): T[] {
 async function mutateTranscript(
   transcriptId: string,
   mutation?: (store: MemoryTranscriptStore) => void,
+  markTextEdited = false,
 ): Promise<void> {
   return enqueueDatabaseWrite(`transcript:${transcriptId}`, async () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -827,6 +861,7 @@ async function mutateTranscript(
             UPDATE transcripts
             SET words_json = ?,
               speaker_hints_json = ?,
+              ${markTextEdited && next.wordsJson !== materialized.wordsJson ? "metadata_json = json_set(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END, '$.manual_text_edited', 1)," : ""}
               content_revision = content_revision + 1,
               updated_at = ?
             WHERE id = ?

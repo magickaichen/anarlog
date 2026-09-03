@@ -40,8 +40,10 @@ export type TranscriptScreen =
 
 export function useTranscriptScreen({
   sessionId,
+  preserveTranscriptWhileBatching = false,
 }: {
   sessionId: string;
+  preserveTranscriptWhileBatching?: boolean;
 }): TranscriptScreen {
   const {
     batchError,
@@ -71,7 +73,10 @@ export function useTranscriptScreen({
   const hasVisibleTranscriptState =
     hasTranscriptWords || liveSegments.length > 0 || !!batchError;
 
-  if (sessionMode === "running_batch") {
+  if (
+    sessionMode === "running_batch" &&
+    !(preserveTranscriptWhileBatching && hasVisibleTranscriptState)
+  ) {
     return {
       kind: "running_batch",
       percentage: batchPercentage,

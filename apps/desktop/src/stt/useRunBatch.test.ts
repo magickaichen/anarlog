@@ -693,6 +693,35 @@ describe("useRunBatch", () => {
     expect(createTranscriptMock).not.toHaveBeenCalled();
   });
 
+  test("returns a refinement candidate without publishing it or deleting retained audio", async () => {
+    startTranscriptionMock.mockImplementation(async (_params, options) => {
+      options.handlePersist(
+        [
+          { text: "refined", start_ms: 1100, end_ms: 1400, channel: 1 },
+          { text: "later recording", start_ms: 2000, end_ms: 2500, channel: 1 },
+        ],
+        [],
+      );
+    });
+    const { result } = renderHook(() => useRunBatch("session-1"));
+    const candidate = await result.current("/tmp/session.wav", {
+      deferPromotion: true,
+      promotion: {
+        scope: "current_capture",
+        audioOffsetMs: 1000,
+        audioEndMs: 1500,
+        replaceTranscriptId: "live-1",
+        startedAt: 5000,
+      },
+    });
+    expect(candidate).toMatchObject({
+      startedAt: 5000,
+      words: [{ text: "refined", start_ms: 100, end_ms: 400 }],
+    });
+    expect(createTranscriptMock).not.toHaveBeenCalled();
+    expect(deleteProcessedAudioForRetentionMock).not.toHaveBeenCalled();
+  });
+
   test("promotes post-stop batch by replacing the live current capture", async () => {
     startTranscriptionMock.mockImplementation(async (_params, options) => {
       options.handlePersist(
