@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -19,8 +19,11 @@ import {
 
 import { enqueueSessionAudioOperation } from "~/session/audio-operations";
 
+const { DatabaseSync } = process.getBuiltinModule(
+  "node:sqlite",
+) as typeof import("node:sqlite");
 const refinementDb = vi.hoisted(() => ({
-  current: null as DatabaseSync | null,
+  current: null as DatabaseSyncType | null,
 }));
 
 const {

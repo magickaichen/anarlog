@@ -2,12 +2,15 @@ import { render, waitFor } from "@testing-library/react";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+const { DatabaseSync } = process.getBuiltinModule(
+  "node:sqlite",
+) as typeof import("node:sqlite");
 const database = vi.hoisted(() => ({
-  current: null as DatabaseSync | null,
+  current: null as DatabaseSyncType | null,
   failPromotion: false,
 }));
 const provider = vi.hoisted(() => ({ ready: false, transcribe: vi.fn() }));
