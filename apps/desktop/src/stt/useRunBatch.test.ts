@@ -19,6 +19,7 @@ const {
   useListenerMock,
   useSessionMock,
   useSessionParticipantsMock,
+  useSessionSpeakerCandidatesMock,
   useSTTConnectionMock,
   useAuthMock,
   refreshSessionMock,
@@ -39,6 +40,7 @@ const {
   useListenerMock: vi.fn(),
   useSessionMock: vi.fn(),
   useSessionParticipantsMock: vi.fn(),
+  useSessionSpeakerCandidatesMock: vi.fn(),
   useSTTConnectionMock: vi.fn(),
   useAuthMock: vi.fn(),
   refreshSessionMock: vi.fn(),
@@ -112,6 +114,7 @@ vi.mock("~/session/attachments", () => ({
 vi.mock("~/session/queries", () => ({
   useSession: useSessionMock,
   useSessionParticipants: useSessionParticipantsMock,
+  useSessionSpeakerCandidates: useSessionSpeakerCandidatesMock,
 }));
 
 vi.mock("~/shared/config", () => ({
@@ -542,6 +545,7 @@ describe("useRunBatch", () => {
       raw_md: "Existing memo",
     });
     useSessionParticipantsMock.mockReturnValue([]);
+    useSessionSpeakerCandidatesMock.mockReturnValue([]);
     useSTTConnectionMock.mockReturnValue({
       conn: {
         provider: "deepgram",
@@ -959,6 +963,27 @@ describe("useRunBatch", () => {
         provider: "soniqo",
         model: "soniqo-parakeet-batch",
         languages: ["de", "en"],
+      }),
+      expect.any(Object),
+    );
+  });
+
+  test("passes only provider-neutral speaker candidate names to batch transcription", async () => {
+    useSessionSpeakerCandidatesMock.mockReturnValue([
+      { humanId: "", name: "Ada Lovelace", source: "observed" },
+      { humanId: "human-2", name: "Grace Hopper", source: "calendar" },
+    ]);
+    startTranscriptionMock.mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useRunBatch("session-1"));
+
+    await act(async () => {
+      await result.current("/tmp/session.wav");
+    });
+
+    expect(startTranscriptionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        speaker_candidates: ["Ada Lovelace", "Grace Hopper"],
       }),
       expect.any(Object),
     );

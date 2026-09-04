@@ -30,9 +30,11 @@ export {
 export type { SessionProposalRecord } from "./queries/proposals";
 export {
   addSessionParticipant,
+  persistObservedParticipants,
   removeSessionParticipant,
   useSessionParticipant,
   useSessionParticipants,
+  useSessionSpeakerCandidates,
 } from "./queries/participants";
 export {
   loadSessionEvent,
@@ -51,5 +53,6 @@ export type {
   SessionChanges,
   SessionParticipantRecord,
   SessionRecord,
+  SessionSpeakerCandidate,
   SessionSummaryRecord,
 } from "./queries/types";

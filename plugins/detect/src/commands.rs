@@ -198,6 +198,25 @@ pub(crate) async fn capture_meeting_chat_messages<R: tauri::Runtime>(
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) async fn capture_meeting_participants<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<anlg_detect::MeetingParticipantCaptureResult, String> {
+    let current_mic_apps = app
+        .detect()
+        .list_mic_using_applications()
+        .map_err(|error| error.to_string())?;
+    let verified_bundle_ids = current_mic_apps
+        .into_iter()
+        .map(|application| application.id)
+        .collect::<Vec<_>>();
+
+    Ok(anlg_detect::capture_meeting_participants(
+        verified_bundle_ids,
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn set_ignored_bundle_ids<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     bundle_ids: Vec<String>,

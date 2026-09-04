@@ -4995,10 +4995,6 @@ msgstr "Unavailable"
 msgid "Undo"
 msgstr "Undo"
 
-#: src/session/components/note-input/transcript/renderer/speaker-assign.tsx
-msgid "Unknown"
-msgstr "Unknown"
-
 #: src/session/components/outer-header/metadata/date.tsx
 msgid "Unknown date"
 msgstr "Unknown date"

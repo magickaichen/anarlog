@@ -119,7 +119,8 @@ struct TranscriptResponse {
     #[serde(default)]
     audio_channels: Option<u32>,
     #[serde(default)]
-    #[serde(alias = "speech_model")]
+    speech_model: Option<String>,
+    #[serde(default)]
     speech_model_used: Option<String>,
     #[serde(default)]
     error: Option<String>,
@@ -358,6 +359,7 @@ impl AssemblyAIAdapter {
     }
 
     fn convert_to_batch_response(response: TranscriptResponse) -> BatchResponse {
+        let speech_model = response.speech_model_used.or(response.speech_model);
         let mut all_words = response.words.unwrap_or_default();
         let num_channels = response.audio_channels.unwrap_or(1).max(1) as usize;
         let confidence = response.confidence.unwrap_or(1.0);
@@ -416,7 +418,7 @@ impl AssemblyAIAdapter {
         BatchResponse {
             metadata: serde_json::json!({
                 "audio_duration": response.audio_duration,
-                "speech_model": response.speech_model_used,
+                "speech_model": speech_model,
             }),
             results: BatchResults { channels },
         }
@@ -473,6 +475,53 @@ mod tests {
         assert_eq!(
             response.speech_model_used.as_deref(),
             Some("universal-3-pro")
+        );
+    }
+
+    #[test]
+    fn transcript_response_accepts_both_provider_model_fields() {
+        let response: TranscriptResponse = serde_json::from_str(
+            r#"{
+                "id": "transcript-id",
+                "status": "completed",
+                "speech_model": "universal-2",
+                "speech_model_used": "universal-3-5-pro"
+            }"#,
+        )
+        .expect("AssemblyAI may return both model fields");
+
+        assert_eq!(
+            response.speech_model_used.as_deref(),
+            Some("universal-3-5-pro")
+        );
+        assert_eq!(response.speech_model.as_deref(), Some("universal-2"));
+
+        let result = AssemblyAIAdapter::convert_to_batch_response(response);
+        assert_eq!(
+            result
+                .metadata
+                .get("speech_model")
+                .and_then(|value| value.as_str()),
+            Some("universal-3-5-pro")
+        );
+    }
+
+    #[test]
+    fn transcript_response_keeps_legacy_provider_model_field() {
+        let response: TranscriptResponse = serde_json::from_value(serde_json::json!({
+            "id": "transcript-id",
+            "status": "completed",
+            "speech_model": "universal-2"
+        }))
+        .unwrap();
+
+        let result = AssemblyAIAdapter::convert_to_batch_response(response);
+        assert_eq!(
+            result
+                .metadata
+                .get("speech_model")
+                .and_then(|value| value.as_str()),
+            Some("universal-2")
         );
     }
 
@@ -617,6 +666,7 @@ mod tests {
             confidence: Some(0.85),
             audio_duration: Some(1),
             audio_channels: Some(2),
+            speech_model: None,
             speech_model_used: Some("universal-3-5-pro".to_string()),
             error: None,
         };

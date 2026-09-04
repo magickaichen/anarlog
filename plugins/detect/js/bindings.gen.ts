@@ -102,6 +102,14 @@ async captureMeetingChatMessages() : Promise<Result<MeetingChatCaptureResult, st
     else return { status: "error", error: e  as any };
 }
 },
+async captureMeetingParticipants() : Promise<Result<MeetingParticipantCaptureResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("plugin:detect|capture_meeting_participants") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getPreferredLanguages() : Promise<Result<string[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("plugin:detect|get_preferred_languages") };
@@ -152,6 +160,8 @@ export type MeetingCapturedChatMessage = { id: string; platform: MeetingPlatform
 export type MeetingChatCaptureResult = { app: MeetingApp | null; platform: MeetingPlatform; surface: MeetingSurface; contextId: string | null; messages: MeetingCapturedChatMessage[]; warnings: string[] }
 export type MeetingChatDirection = "incoming" | "outgoing"
 export type MeetingChatSendResult = { sent: boolean; app: MeetingApp | null; platform: MeetingPlatform; surface: MeetingSurface; inputLabel: string | null; sendAction: string | null; warnings: string[] }
+export type MeetingObservedParticipant = { displayName: string }
+export type MeetingParticipantCaptureResult = { app: MeetingApp | null; platform: MeetingPlatform; surface: MeetingSurface; participants: MeetingObservedParticipant[]; warnings: string[] }
 export type MeetingPlatform = "zoom" | "googleMeet" | "microsoftTeams" | "slack" | "discord" | "webex" | "unknown"
 export type MeetingSurface = "native" | "web" | "unknown"
 

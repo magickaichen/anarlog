@@ -112,6 +112,8 @@ pub struct BatchParams {
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
+    pub speaker_candidates: Vec<String>,
+    #[serde(default)]
     pub num_speakers: Option<u32>,
     #[serde(default)]
     pub min_speakers: Option<u32>,
@@ -375,6 +377,7 @@ mod tests {
             api_key: "key".to_string(),
             languages: vec![anlg_language::ISO639::En.into()],
             keywords: vec![],
+            speaker_candidates: vec![],
             num_speakers: None,
             min_speakers: None,
             max_speakers: None,

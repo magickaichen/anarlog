@@ -338,6 +338,8 @@ export const sessionParticipants = sqliteTable(
     role: text("role").notNull().default(""),
     source: text("source").notNull().default(""),
     metadataJson: text("metadata_json").notNull().default("{}"),
+    firstObservedAt: text("first_observed_at"),
+    lastObservedAt: text("last_observed_at"),
     createdAt: text("created_at").notNull().default(currentTimestamp),
     updatedAt: text("updated_at").notNull().default(currentTimestamp),
     deletedAt: text("deleted_at"),

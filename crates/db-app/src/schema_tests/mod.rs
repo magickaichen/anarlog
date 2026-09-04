@@ -173,6 +173,7 @@ mod consent;
 mod encrypted_replica;
 mod entities;
 mod migrations;
+mod observed_participants;
 mod search_index;
 mod shared_session_cache;
 mod transcript_live_deltas;

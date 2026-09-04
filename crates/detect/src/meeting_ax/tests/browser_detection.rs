@@ -426,6 +426,25 @@ fn test_select_child_walk_prefers_visible_subset() {
 }
 
 #[test]
+fn test_participant_snapshot_reaches_nested_virtualized_trees() {
+    assert_eq!(SnapshotPurpose::General.max_depth(), MAX_TREE_DEPTH);
+    assert_eq!(
+        SnapshotPurpose::ObservedParticipants.max_depth(),
+        MAX_PARTICIPANT_TREE_DEPTH
+    );
+    assert!(!SnapshotPurpose::General.allows_visible_subset(4));
+    assert!(SnapshotPurpose::ObservedParticipants.allows_visible_subset(4));
+    assert_eq!(
+        select_child_walk(
+            Some(MAX_NODES + 1),
+            Some(24),
+            SnapshotPurpose::ObservedParticipants.allows_visible_subset(4),
+        ),
+        Some(ChildWalk::Visible)
+    );
+}
+
+#[test]
 fn test_chat_priority_labels_prefer_meet_chat_over_video_tiles() {
     assert!(is_chat_priority_label("In-call messages"));
     assert!(is_chat_priority_label("Send a message"));

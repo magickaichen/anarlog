@@ -29,14 +29,18 @@ const {
   assignTranscriptSpeakerMock,
   addSessionParticipantMock,
   createHumanMock,
+  persistObservedParticipantsMock,
   useHumansMock,
   useSessionParticipantsMock,
+  useSessionSpeakerCandidatesMock,
 } = vi.hoisted(() => ({
   assignTranscriptSpeakerMock: vi.fn(),
   addSessionParticipantMock: vi.fn(),
   createHumanMock: vi.fn(),
+  persistObservedParticipantsMock: vi.fn(),
   useHumansMock: vi.fn(),
   useSessionParticipantsMock: vi.fn(),
+  useSessionSpeakerCandidatesMock: vi.fn(),
 }));
 
 vi.mock("@anlg/ui/components/ui/popover", async () => {
@@ -128,8 +132,10 @@ vi.mock("~/contacts/queries", () => ({
 
 vi.mock("~/session/queries", () => ({
   addSessionParticipant: addSessionParticipantMock,
+  persistObservedParticipants: persistObservedParticipantsMock,
   useSession: () => ({ user_id: "user-1" }),
   useSessionParticipants: useSessionParticipantsMock,
+  useSessionSpeakerCandidates: useSessionSpeakerCandidatesMock,
 }));
 
 vi.mock("~/stt/queries", () => ({
@@ -141,6 +147,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   assignTranscriptSpeakerMock.mockResolvedValue(undefined);
   addSessionParticipantMock.mockResolvedValue(undefined);
+  persistObservedParticipantsMock.mockResolvedValue(undefined);
   createHumanMock.mockResolvedValue("human-new");
   useHumansMock.mockReturnValue([
     {
@@ -151,6 +158,7 @@ beforeEach(() => {
     },
   ]);
   useSessionParticipantsMock.mockReturnValue([]);
+  useSessionSpeakerCandidatesMock.mockReturnValue([]);
 });
 
 function option(
@@ -293,6 +301,73 @@ describe("SpeakerAssignPopover", () => {
           mode: "segment",
           wordIds: ["word-1"],
         }),
+      );
+    });
+  });
+
+  it("turns an observed name-only candidate into an assignable participant", async () => {
+    useSessionParticipantsMock.mockReturnValue([
+      {
+        id: "observed-1",
+        sessionId: "session-1",
+        humanId: "",
+        source: "observed",
+        name: "Ada Lovelace",
+        email: "",
+      },
+    ]);
+    useSessionSpeakerCandidatesMock.mockReturnValue([
+      { humanId: "", name: "Ada Lovelace", source: "observed" },
+    ]);
+
+    render(
+      createElement(SpeakerAssignPopover, {
+        segment: {
+          id: "segment-1",
+          key: {
+            channel: "RemoteParty",
+            speaker_index: 1,
+            speaker_human_id: null,
+          },
+          start_ms: 0,
+          end_ms: 100,
+          text: "hello",
+          words: [
+            {
+              id: "word-1",
+              text: "hello",
+              start_ms: 0,
+              end_ms: 100,
+              channel: "RemoteParty",
+              is_final: true,
+            },
+          ],
+        } as Segment,
+        transcriptId: "transcript-1",
+        sessionId: "session-1",
+        color: "red",
+        label: "Speaker 1",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Speaker 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ada Lovelace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => {
+      expect(createHumanMock).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Ada Lovelace" }),
+      );
+      expect(addSessionParticipantMock).toHaveBeenCalledWith(
+        "session-1",
+        "human-new",
+      );
+      expect(persistObservedParticipantsMock).toHaveBeenCalledWith(
+        "session-1",
+        ["Ada Lovelace"],
+      );
+      expect(assignTranscriptSpeakerMock).toHaveBeenCalledWith(
+        expect.objectContaining({ humanId: "human-new" }),
       );
     });
   });

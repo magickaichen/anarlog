@@ -142,6 +142,8 @@ pub struct TranscriptionParams {
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
+    pub speaker_candidates: Vec<String>,
+    #[serde(default)]
     pub num_speakers: Option<u32>,
     #[serde(default)]
     pub min_speakers: Option<u32>,
@@ -322,6 +324,7 @@ impl From<TranscriptionParams> for listener2::BatchParams {
             api_key: value.api_key,
             languages: value.languages,
             keywords: value.keywords,
+            speaker_candidates: value.speaker_candidates,
             num_speakers: value.num_speakers,
             min_speakers: value.min_speakers,
             max_speakers: value.max_speakers,

@@ -33,7 +33,11 @@ import {
 } from "~/services/audio-retention";
 import { maybeExtractVoiceprintCandidates } from "~/services/voiceprint";
 import { markSessionAudioTranscriptionComplete } from "~/session/attachments";
-import { useSession, useSessionParticipants } from "~/session/queries";
+import {
+  useSession,
+  useSessionParticipants,
+  useSessionSpeakerCandidates,
+} from "~/session/queries";
 import { useConfigValue } from "~/shared/config";
 import { id } from "~/shared/utils";
 import type { BatchPersistCallback } from "~/store/zustand/listener/transcript";
@@ -222,6 +226,7 @@ export const useRunBatch = (
 ) => {
   const session = useSession(sessionId);
   const participants = useSessionParticipants(sessionId);
+  const speakerCandidates = useSessionSpeakerCandidates(sessionId);
   const persistedPolicy = targetPolicy ?? session?.transcription ?? undefined;
 
   const startTranscription = useListener((state) => state.startTranscription);
@@ -463,6 +468,9 @@ export const useRunBatch = (
             api_key: target.apiKey,
             keywords,
             languages,
+            speaker_candidates: speakerCandidates.map(
+              (candidate) => candidate.name,
+            ),
             num_speakers: options?.numSpeakers ?? inferredNumSpeakers,
             min_speakers: options?.minSpeakers,
             max_speakers: options?.maxSpeakers,

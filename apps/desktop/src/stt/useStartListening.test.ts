@@ -70,6 +70,8 @@ const {
   sonnerToastDismissMock,
   startMeetingChatCaptureMock,
   stopMeetingChatCaptureMock,
+  startMeetingParticipantCaptureMock,
+  stopMeetingParticipantCaptureMock,
   catalogLocalSessionAudioMock,
   markSessionAudioTranscriptionCompleteMock,
   getEnhancerServiceMock,
@@ -123,6 +125,8 @@ const {
   sonnerToastDismissMock: vi.fn(),
   startMeetingChatCaptureMock: vi.fn(),
   stopMeetingChatCaptureMock: vi.fn(),
+  startMeetingParticipantCaptureMock: vi.fn(),
+  stopMeetingParticipantCaptureMock: vi.fn(),
   catalogLocalSessionAudioMock: vi.fn(),
   markSessionAudioTranscriptionCompleteMock: vi.fn(),
   getEnhancerServiceMock: vi.fn(),
@@ -197,6 +201,10 @@ vi.mock("~/ai/task-window-sync", () => ({
 
 vi.mock("./meeting-chat-capture", () => ({
   startMeetingChatCapture: startMeetingChatCaptureMock,
+}));
+
+vi.mock("./meeting-participant-capture", () => ({
+  startMeetingParticipantCapture: startMeetingParticipantCaptureMock,
 }));
 
 vi.mock("./useKeywords", () => ({
@@ -558,6 +566,9 @@ describe("useStartListening", () => {
       },
     });
     startMeetingChatCaptureMock.mockReturnValue(stopMeetingChatCaptureMock);
+    startMeetingParticipantCaptureMock.mockReturnValue(
+      stopMeetingParticipantCaptureMock,
+    );
   });
 
   test("uses the persisted meeting target for live transcript persistence", async () => {

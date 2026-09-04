@@ -10,6 +10,7 @@ import {
   MEETING_DISCLOSURE_MESSAGE,
   startMeetingRecordingDisclosure,
 } from "./meeting-disclosure";
+import { startMeetingParticipantCapture } from "./meeting-participant-capture";
 
 import { trackAnalyticsEvent } from "~/analytics";
 import { useShell } from "~/contexts/shell";
@@ -232,19 +233,23 @@ export function useStartListening(sessionId: string) {
 
     setLeftSidebarExpanded(false);
 
-    setStopMeetingChatCapture(
-      startMeetingChatCapture({
-        sessionId,
-        excludedTexts: [MEETING_DISCLOSURE_MESSAGE],
-        onParticipantDeclined: () => {
-          sonnerToast.warning(
-            "A participant declined recording. Anarlog stopped listening.",
-            { id: "meeting-consent-declined", duration: Infinity },
-          );
-          stop();
-        },
-      }),
-    );
+    const stopParticipantCapture = startMeetingParticipantCapture({
+      sessionId,
+    });
+    const stopChatCapture = startMeetingChatCapture({
+      sessionId,
+      excludedTexts: [MEETING_DISCLOSURE_MESSAGE],
+      onParticipantDeclined: () => {
+        sonnerToast.warning(
+          "A participant declined recording. Anarlog stopped listening.",
+          { id: "meeting-consent-declined", duration: Infinity },
+        );
+        stop();
+      },
+    });
+    setStopMeetingChatCapture(async () => {
+      await Promise.all([stopParticipantCapture(), stopChatCapture()]);
+    });
 
     if (meetingDisclosureAutoSendChat) {
       startMeetingRecordingDisclosure(

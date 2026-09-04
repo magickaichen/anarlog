@@ -37,6 +37,7 @@ import {
   isSessionEmpty,
   loadSessionEvent,
   persistChatSessionProposal,
+  persistObservedParticipants,
   removeSessionParticipant,
   restoreDeletedSession,
   softDeleteSession,
@@ -238,6 +239,142 @@ describe("session SQLite operations", () => {
     expect(statement.sql).toContain("THEN 'excluded'");
     expect(statement.sql).toContain("deleted_at = CASE");
     expect(statement.params).toContain("mapping-1");
+  });
+
+  it("updates one observed participant instead of inserting a duplicate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T10:00:00.000Z"));
+    mocks.execute.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: "participant-1",
+        human_id: "",
+        source: "observed",
+        name: "Ada Lovelace",
+      },
+    ]);
+
+    await persistObservedParticipants("session-1", ["  Ada   Lovelace  "]);
+    await persistObservedParticipants("session-1", ["ada lovelace"]);
+
+    const firstStatements = mocks.executeTransaction.mock.calls[0][0];
+    expect(firstStatements).toHaveLength(1);
+    expect(firstStatements[0].sql).toContain(
+      "INSERT INTO session_participants",
+    );
+    expect(firstStatements[0].params).toContain("Ada Lovelace");
+    expect(firstStatements[0].params).not.toContain("ada@example.com");
+
+    const secondStatements = mocks.executeTransaction.mock.calls[1][0];
+    expect(secondStatements).toHaveLength(1);
+    expect(secondStatements[0].sql).toContain("UPDATE session_participants");
+    expect(secondStatements[0].sql).toContain("last_observed_at");
+    expect(secondStatements[0].params).toContain("participant-1");
+  });
+
+  it("does not attach a name-only observation to an ambiguous human identity", async () => {
+    mocks.execute.mockResolvedValueOnce([
+      {
+        id: "participant-1",
+        human_id: "human-1",
+        source: "auto",
+        name: "Alex Kim",
+      },
+      {
+        id: "participant-2",
+        human_id: "human-2",
+        source: "manual",
+        name: "Alex Kim",
+      },
+    ]);
+
+    await persistObservedParticipants("session-1", ["Alex Kim"]);
+
+    const statements = mocks.executeTransaction.mock.calls[0][0];
+    expect(statements).toHaveLength(1);
+    expect(statements[0].sql).toContain("INSERT INTO session_participants");
+    expect(statements[0].params).not.toContain("participant-1");
+    expect(statements[0].params).not.toContain("participant-2");
+  });
+
+  it("keeps ambiguous identities out of an anonymous observation interval", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T08:00:00.000Z"));
+    mocks.execute.mockResolvedValueOnce([
+      {
+        id: "participant-1",
+        human_id: "human-1",
+        source: "auto",
+        name: "Alex Kim",
+        first_observed_at: "2026-08-30T06:00:00.000Z",
+        last_observed_at: "2026-08-30T09:00:00.000Z",
+      },
+      {
+        id: "observed-anonymous",
+        human_id: "",
+        source: "observed",
+        name: "Alex Kim",
+        first_observed_at: "2026-08-30T07:00:00.000Z",
+        last_observed_at: "2026-08-30T07:05:00.000Z",
+      },
+      {
+        id: "participant-2",
+        human_id: "human-2",
+        source: "manual",
+        name: "Alex Kim",
+        first_observed_at: "2026-08-30T06:30:00.000Z",
+        last_observed_at: "2026-08-30T07:30:00.000Z",
+      },
+    ]);
+
+    await persistObservedParticipants("session-1", ["Alex Kim"]);
+
+    const statements = mocks.executeTransaction.mock.calls[0][0];
+    expect(statements).toHaveLength(1);
+    expect(statements[0].params).toEqual([
+      "Alex Kim",
+      "2026-08-30T07:00:00.000Z",
+      "2026-08-30T08:00:00.000Z",
+      "2026-08-30T08:00:00.000Z",
+      "observed-anonymous",
+    ]);
+  });
+
+  it("merges an anonymous observation after one matching identity becomes available", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T08:00:00.000Z"));
+    mocks.execute.mockResolvedValueOnce([
+      {
+        id: "observed-anonymous",
+        human_id: "",
+        source: "observed",
+        name: "Ada Lovelace",
+        first_observed_at: "2026-08-30T07:00:00.000Z",
+        last_observed_at: "2026-08-30T07:05:00.000Z",
+      },
+      {
+        id: "calendar-known",
+        human_id: "human-1",
+        source: "auto",
+        name: "Ada Lovelace",
+        first_observed_at: null,
+        last_observed_at: null,
+      },
+    ]);
+
+    await persistObservedParticipants("session-1", ["Ada Lovelace"]);
+
+    const statements = mocks.executeTransaction.mock.calls[0][0];
+    expect(statements).toHaveLength(2);
+    expect(statements[0].sql).toContain("UPDATE session_participants");
+    expect(statements[0].params).toEqual([
+      "Ada Lovelace",
+      "2026-08-30T07:00:00.000Z",
+      "2026-08-30T08:00:00.000Z",
+      "2026-08-30T08:00:00.000Z",
+      "calendar-known",
+    ]);
+    expect(statements[1].sql).toContain("SET deleted_at = ?");
+    expect(statements[1].params).toContain("observed-anonymous");
   });
 
   it("commits enhanced note content and the derived session title together", async () => {
